@@ -1,0 +1,30 @@
+version: "3.8"
+
+services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - VAULT_PATH=/data/vault
+      - INDEX_DIR=/data/index
+      - LLM_BASE_URL=http://ollama:11434/v1
+      - LLM_API_KEY=not-needed
+      - LLM_MODEL=qwen2.5:3b
+      - API_KEY=${API_KEY:-}
+    volumes:
+      - ./data:/data
+      - ${OBSIDIAN_VAULT:-./vault}:/data/vault:ro
+    depends_on:
+      - ollama
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    command: ["ollama", "serve"]
+
+volumes:
+  ollama_data:

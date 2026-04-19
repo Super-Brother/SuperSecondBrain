@@ -5,8 +5,10 @@
 - [[]] 双向链接解析
 - # 标签提取
 - 标题层级结构保留
+- 增量解析（基于文件 MD5 检测变更）
 """
 
+import hashlib
 import os
 import re
 from dataclasses import dataclass, field
@@ -29,6 +31,7 @@ class ObsidianNote:
     date: Optional[str] = None
     outbound_links: list[str] = field(default_factory=list)  # 引用的其他笔记
     headings: list[str] = field(default_factory=list)         # 标题层级
+    content_hash: str = ""  # 内容 MD5，用于增量检测
 
 
 class ObsidianParser:
@@ -74,6 +77,9 @@ class ObsidianParser:
         # 文件夹（领域分类用）
         folder = str(path.parent.relative_to(self.vault_path)) if path.parent != self.vault_path else "root"
 
+        # 内容哈希
+        content_hash = hashlib.md5(content.encode()).hexdigest()
+
         return ObsidianNote(
             title=title,
             content=content.strip(),
@@ -85,6 +91,7 @@ class ObsidianParser:
             date=date,
             outbound_links=outbound_links,
             headings=headings,
+            content_hash=content_hash,
         )
 
     def parse_vault(self, exclude_dirs: list[str] = None) -> list[ObsidianNote]:
@@ -94,18 +101,63 @@ class ObsidianParser:
 
         notes = []
         for md_file in self.vault_path.rglob("*.md"):
-            # 跳过排除目录
             if any(part in exclude_dirs for part in md_file.parts):
                 continue
             try:
                 note = self.parse_file(str(md_file))
-                # 过滤空内容或太短的笔记
                 if len(note.content) > 10:
                     notes.append(note)
             except Exception as e:
                 print(f"[WARN] 解析失败 {md_file}: {e}")
 
         return notes
+
+    def parse_vault_incremental(
+        self,
+        manifest: dict[str, str],
+        exclude_dirs: list[str] = None,
+    ) -> tuple[list[ObsidianNote], list[str]]:
+        """增量解析 vault，返回 (新增/变更笔记, 已删除文件相对路径列表)
+
+        manifest: {relative_path: content_hash} 上次索引时的文件状态
+        """
+        if exclude_dirs is None:
+            exclude_dirs = [".obsidian", ".trash", ".git"]
+
+        current_files = {}
+        for md_file in self.vault_path.rglob("*.md"):
+            if any(part in exclude_dirs for part in md_file.parts):
+                continue
+            rel_path = str(md_file.relative_to(self.vault_path))
+            current_files[rel_path] = md_file
+
+        # 检测删除
+        deleted = [rp for rp in manifest if rp not in current_files]
+
+        # 检测新增和变更
+        changed_notes = []
+        for rel_path, md_file in current_files.items():
+            old_hash = manifest.get(rel_path)
+            if old_hash is None:
+                # 新文件：需要解析
+                pass
+            else:
+                # 快速检测：读取文件计算 MD5，不解析
+                raw = md_file.read_text(encoding="utf-8")
+                _, content = self._split_frontmatter(raw)
+                current_hash = hashlib.md5(content.encode()).hexdigest()
+                if current_hash == old_hash:
+                    continue
+
+            # 新增或变更：完整解析
+            try:
+                note = self.parse_file(str(md_file))
+                if len(note.content) > 10:
+                    changed_notes.append(note)
+            except Exception as e:
+                print(f"[WARN] 解析失败 {md_file}: {e}")
+
+        return changed_notes, deleted
 
     def _split_frontmatter(self, raw: str) -> tuple[Optional[str], str]:
         """分离 YAML frontmatter 和正文"""

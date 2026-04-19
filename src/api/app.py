@@ -3,20 +3,23 @@
 import json
 import os
 import sys
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Query
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, HTMLResponse
 from pydantic import BaseModel
 
-# 将项目根目录加入 path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from src.retrievers.pipeline import SecondBrainPipeline, PipelineConfig
+from src.models.conversation import ConversationManager
+from src.utils.logger import log
+from src.utils.cache import ResponseCache
+from src.api.auth import APIKeyMiddleware
 from src.api.static import HTML_TEMPLATE
-
 
 # ---- 配置 ----
 
@@ -26,16 +29,17 @@ VAULT_PATH = os.getenv(
 )
 INDEX_DIR = os.getenv("INDEX_DIR", "data/index")
 
-
-# ---- 全局 pipeline ----
+# ---- 全局状态 ----
 
 pipeline: SecondBrainPipeline = None
+conv_manager: ConversationManager = None
+response_cache: ResponseCache = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """应用生命周期：启动时加载索引"""
-    global pipeline
+    global pipeline, conv_manager, response_cache
+
     config = PipelineConfig(
         vault_path=VAULT_PATH,
         index_dir=INDEX_DIR,
@@ -44,24 +48,25 @@ async def lifespan(app: FastAPI):
         llm_model=os.getenv("LLM_MODEL", "qwen2.5:3b"),
     )
     pipeline = SecondBrainPipeline(config)
+    conv_manager = ConversationManager()
+    response_cache = ResponseCache(max_size=256, ttl_seconds=int(os.getenv("CACHE_TTL", "3600")))
 
     index_path = Path(INDEX_DIR)
     if (index_path / "faiss.index").exists():
-        print(f"[Startup] 加载已有索引: {INDEX_DIR}")
+        log.info("加载已有索引: %s", INDEX_DIR)
         pipeline.load_index(INDEX_DIR)
     else:
-        print(f"[Startup] 未找到索引，需要先构建。请运行: python scripts/build_index.py")
-        # 不阻塞启动，但对话会返回错误
+        log.warning("未找到索引，请运行: python scripts/build_index.py")
 
     yield
 
 
-# ---- FastAPI App ----
+# ---- App ----
 
 app = FastAPI(
     title="SecondBrain Chat API",
     description="基于 RAG 的个人知识库智能问答系统",
-    version="0.1.0",
+    version="0.2.0",
     lifespan=lifespan,
 )
 
@@ -72,6 +77,22 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+api_key = os.getenv("API_KEY", "")
+if api_key:
+    app.add_middleware(APIKeyMiddleware, api_key=api_key)
+    log.info("API Key 认证已启用")
+
+
+# ---- 请求计时中间件 ----
+
+@app.middleware("http")
+async def log_requests(request, call_next):
+    start = time.time()
+    response = await call_next(request)
+    latency = (time.time() - start) * 1000
+    log.info("%s %s → %d (%.0fms)", request.method, request.url.path, response.status_code, latency)
+    return response
+
 
 # ---- 数据模型 ----
 
@@ -80,19 +101,49 @@ class ChatRequest(BaseModel):
     domain: str | None = None
     top_k: int | None = None
     stream: bool = False
+    session_id: str | None = None
 
 
 class ChatResponse(BaseModel):
     query: str
     answer: str
     sources: list[dict]
+    session_id: str
 
 
-# ---- API 端点 ----
+class SessionResponse(BaseModel):
+    session_id: str
+
+
+class FeedbackRequest(BaseModel):
+    session_id: str
+    query: str
+    rating: int  # 1=好评, -1=差评
+    comment: str | None = None
+
+
+# ---- 辅助 ----
+
+def _get_history(session_id: str | None) -> list[dict] | None:
+    if not session_id or conv_manager is None:
+        return None
+    messages = conv_manager.get_history(session_id)
+    if not messages:
+        return None
+    return [{"role": m.role, "content": m.content} for m in messages]
+
+
+def _save_turn(session_id: str, query: str, answer: str):
+    if not session_id or conv_manager is None:
+        return
+    conv_manager.add_message(session_id, "user", query)
+    conv_manager.add_message(session_id, "assistant", answer)
+
+
+# ---- API ----
 
 @app.get("/health")
 async def health_check():
-    """健康检查"""
     if pipeline is None:
         return {"status": "starting", "index_loaded": False}
     return {
@@ -104,76 +155,116 @@ async def health_check():
 
 @app.get("/stats")
 async def get_stats():
-    """知识库统计"""
     if pipeline is None:
         return {"error": "服务未就绪"}
-    return pipeline.get_stats()
+    stats = pipeline.get_stats()
+    # 附加 token 使用统计
+    if pipeline.llm_generator:
+        stats["token_usage"] = pipeline.llm_generator.get_usage_stats()
+    stats["cache_size"] = response_cache.size if response_cache else 0
+    return stats
+
+
+@app.post("/api/v1/sessions", response_model=SessionResponse)
+async def create_session():
+    return SessionResponse(session_id=conv_manager.create_session())
+
+
+@app.get("/api/v1/sessions")
+async def list_sessions(limit: int = 50):
+    return {"sessions": conv_manager.list_sessions(limit=limit)}
+
+
+@app.delete("/api/v1/sessions/{session_id}")
+async def delete_session(session_id: str):
+    conv_manager.delete_session(session_id)
+    return {"status": "ok"}
 
 
 @app.post("/api/v1/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
-    """对话接口（非流式）"""
     if pipeline is None or pipeline.rag_retriever is None:
         return ChatResponse(
             query=request.query,
             answer="知识库索引未加载，请先构建索引。",
             sources=[],
+            session_id=request.session_id or "",
         )
 
+    session_id = request.session_id or conv_manager.create_session()
+
+    # 查缓存
+    cached = response_cache.get(request.query, request.domain) if response_cache else None
+    if cached:
+        log.info("缓存命中: %s", request.query[:30])
+        _save_turn(session_id, request.query, cached["answer"])
+        return ChatResponse(**cached, session_id=session_id)
+
+    history = _get_history(session_id)
     result = pipeline.chat(
         query=request.query,
         domain=request.domain,
         top_k=request.top_k,
+        history=history,
     )
-    return ChatResponse(**result)
+
+    _save_turn(session_id, request.query, result["answer"])
+
+    # 写缓存
+    if response_cache:
+        response_cache.put(request.query, result, request.domain)
+
+    return ChatResponse(**result, session_id=session_id)
 
 
 @app.post("/api/v1/chat/stream")
 async def chat_stream(request: ChatRequest):
-    """对话接口（流式 SSE）"""
     if pipeline is None or pipeline.rag_retriever is None:
         async def error_stream():
             yield "data: " + json.dumps({"error": "知识库索引未加载"}, ensure_ascii=False) + "\n\n"
         return StreamingResponse(error_stream(), media_type="text/event-stream")
 
+    session_id = request.session_id or conv_manager.create_session()
+    history = _get_history(session_id)
+
     async def generate():
-        # 先发送来源
-        sources_sent = False
+        full_answer = ""
         async for chunk in pipeline.chat_stream(
             query=request.query,
             domain=request.domain,
             top_k=request.top_k,
+            history=history,
         ):
             if chunk.startswith("__SOURCES__:"):
-                # 来源信息作为第一个事件
                 sources_json = chunk.replace("__SOURCES__:", "").strip()
                 yield f"data: {json.dumps({'type': 'sources', 'data': json.loads(sources_json)}, ensure_ascii=False)}\n\n"
-                sources_sent = True
             else:
+                full_answer += chunk
                 yield f"data: {json.dumps({'type': 'answer', 'content': chunk}, ensure_ascii=False)}\n\n"
 
-        yield f"data: {json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({'type': 'done', 'session_id': session_id}, ensure_ascii=False)}\n\n"
+        _save_turn(session_id, request.query, full_answer)
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
 
 @app.get("/api/v1/domains")
 async def list_domains():
-    """列出所有领域"""
     if pipeline is None:
         return {"error": "服务未就绪"}
-    stats = pipeline.get_stats()
-    return {"domains": stats.get("domain_distribution", {})}
+    return {"domains": pipeline.get_stats().get("domain_distribution", {})}
+
+
+@app.post("/api/v1/feedback")
+async def submit_feedback(request: FeedbackRequest):
+    log.info("反馈: session=%s rating=%d query=%s", request.session_id, request.rating, request.query[:30])
+    return {"status": "ok"}
 
 
 @app.get("/", response_class=HTMLResponse)
 async def index():
-    """前端页面"""
     return HTML_TEMPLATE
 
-
-# ---- 启动命令 ----
-# uvicorn src.api.app:app --host 0.0.0.0 --port 8000 --reload
 
 if __name__ == "__main__":
     import uvicorn

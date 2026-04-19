@@ -22,6 +22,7 @@ from src.retrievers.rag_retriever import (
     SearchConfig,
 )
 from src.models.llm_generator import LLMGenerator, LLMConfig
+from src.retrievers.query_rewriter import QueryRewriter
 
 
 @dataclass
@@ -43,6 +44,7 @@ class PipelineConfig:
     default_rerank_top_k: int = 5
     bm25_weight: float = 0.3
     vector_weight: float = 0.7
+    enable_query_rewrite: bool = True
 
 
 class SecondBrainPipeline:
@@ -55,24 +57,30 @@ class SecondBrainPipeline:
         self.hybrid_retriever = None
         self.rag_retriever = None
         self.llm_generator = None
+        self.query_rewriter = None
         self._stats = {}
 
-    def build_index(self, vault_path: str = None, chunk_size: int = None):
-        """从 Obsidian vault 构建全量索引"""
+    def build_index(self, vault_path: str = None, chunk_size: int = None, incremental: bool = False):
+        """从 Obsidian vault 构建索引，支持增量模式"""
         vault_path = vault_path or self.config.vault_path
         chunk_size = chunk_size or self.config.chunk_size
 
-        print(f"📂 解析 Obsidian vault: {vault_path}")
         parser = ObsidianParser(vault_path)
+
+        if incremental:
+            return self._build_index_incremental(parser, chunk_size)
+        return self._build_index_full(parser, chunk_size)
+
+    def _build_index_full(self, parser, chunk_size: int):
+        """全量构建索引"""
+        print(f"📂 解析 Obsidian vault: {parser.vault_path}")
         notes = parser.parse_vault()
         print(f"📄 解析到 {len(notes)} 篇笔记")
 
-        # 切分
         print(f"✂️  切分文档（chunk_size={chunk_size}）...")
         docs = split_notes_to_documents(notes, chunk_size=chunk_size, chunk_overlap=self.config.chunk_overlap)
         print(f"📝 切分为 {len(docs)} 个 chunks")
 
-        # 统计
         from collections import Counter
         domains = Counter(doc.metadata["domain"] for doc in docs)
         self._stats = {
@@ -82,22 +90,97 @@ class SecondBrainPipeline:
         }
         print(f"📊 领域分布: {dict(domains.most_common())}")
 
-        # 构建向量索引
         self.vector_retriever = VectorRetriever()
         self.vector_retriever.build_index(docs)
 
-        # 构建 BM25 索引
         self.bm25_retriever = BM25Retriever()
         self.bm25_retriever.build_index(docs)
 
-        # 组装混合检索器
         self.hybrid_retriever = HybridRetriever(self.vector_retriever, self.bm25_retriever)
         self.rag_retriever = RAGRetriever(self.hybrid_retriever)
 
-        # 保存索引
         self.save_index(self.config.index_dir)
+
+        # 生成 manifest
+        manifest = {}
+        for doc in docs:
+            rp = doc.metadata.get("relative_path", "")
+            h = doc.metadata.get("content_hash", "")
+            if rp and h:
+                manifest[rp] = h
+        manifest_path = os.path.join(self.config.index_dir, "manifest.json")
+        with open(manifest_path, "w") as f:
+            json.dump(manifest, f, ensure_ascii=False, indent=2)
+
         print(f"✅ 索引构建完成，已保存到 {self.config.index_dir}")
 
+        return self._stats
+
+    def _build_index_incremental(self, parser, chunk_size: int):
+        """增量构建索引：只处理新增/变更的文件"""
+        manifest_path = os.path.join(self.config.index_dir, "manifest.json")
+        manifest = {}
+        if os.path.exists(manifest_path):
+            with open(manifest_path, "r") as f:
+                manifest = json.load(f)
+
+        print(f"📂 增量解析（已有 {len(manifest)} 个文件记录）...")
+        changed_notes, deleted = parser.parse_vault_incremental(manifest)
+        print(f"📄 新增/变更: {len(changed_notes)} 篇，删除: {len(deleted)} 篇")
+
+        if not changed_notes and not deleted:
+            print("✅ 无变更，跳过索引重建")
+            return self._stats
+
+        # 需要重建：过滤掉删除的旧 chunks + 加入新 chunks
+        print(f"✂️  切分变更文档...")
+        new_docs = split_notes_to_documents(
+            changed_notes, chunk_size=chunk_size, chunk_overlap=self.config.chunk_overlap,
+        )
+        print(f"📝 新增 {len(new_docs)} 个 chunks")
+
+        # 加载旧 documents，过滤删除的
+        old_docs = []
+        docs_path = os.path.join(self.config.index_dir, "documents.pkl")
+        if os.path.exists(docs_path):
+            with open(docs_path, "rb") as f:
+                old_docs = pickle.load(f)
+
+        deleted_set = set(deleted)
+        filtered_old = [d for d in old_docs if d.metadata.get("relative_path", "") not in deleted_set]
+        all_docs = filtered_old + new_docs
+
+        from collections import Counter
+        domains = Counter(doc.metadata["domain"] for doc in all_docs)
+        self._stats = {
+            "total_notes": len(set(doc.metadata.get("relative_path", "") for doc in all_docs)),
+            "total_chunks": len(all_docs),
+            "domain_distribution": dict(domains.most_common()),
+        }
+
+        # 重建索引
+        self.vector_retriever = VectorRetriever()
+        self.vector_retriever.build_index(all_docs)
+
+        self.bm25_retriever = BM25Retriever()
+        self.bm25_retriever.build_index(all_docs)
+
+        self.hybrid_retriever = HybridRetriever(self.vector_retriever, self.bm25_retriever)
+        self.rag_retriever = RAGRetriever(self.hybrid_retriever)
+
+        self.save_index(self.config.index_dir)
+
+        # 更新 manifest
+        new_manifest = {}
+        for doc in all_docs:
+            rp = doc.metadata.get("relative_path", "")
+            h = doc.metadata.get("content_hash", "")
+            if rp and h:
+                new_manifest[rp] = h
+        with open(manifest_path, "w") as f:
+            json.dump(new_manifest, f, ensure_ascii=False, indent=2)
+
+        print(f"✅ 增量索引完成（共 {len(all_docs)} chunks）")
         return self._stats
 
     def load_index(self, index_dir: str = None):
@@ -140,11 +223,8 @@ class SecondBrainPipeline:
 
         print(f"✅ 索引加载完成（{self.vector_retriever.index.ntotal} 个向量）")
 
-    def chat(self, query: str, domain: str = None, top_k: int = None) -> dict:
-        """同步对话（非流式）"""
-        if self.rag_retriever is None:
-            raise RuntimeError("请先调用 build_index() 或 load_index()")
-
+    def _ensure_llm(self):
+        """延迟初始化 LLM 和 QueryRewriter"""
         if self.llm_generator is None:
             llm_config = LLMConfig(
                 base_url=self.config.llm_base_url,
@@ -154,6 +234,32 @@ class SecondBrainPipeline:
             )
             self.llm_generator = LLMGenerator(llm_config)
 
+        if self.query_rewriter is None and self.config.enable_query_rewrite:
+            self.query_rewriter = QueryRewriter(
+                base_url=self.config.llm_base_url,
+                api_key=self.config.llm_api_key,
+                model=self.config.llm_model,
+            )
+
+    def _rewrite_query(self, query: str) -> tuple[str, str]:
+        """查询改写，返回 (改写后查询, 原始查询)"""
+        if self.query_rewriter:
+            try:
+                rewritten = self.query_rewriter.rewrite(query)
+                print(f"[QueryRewrite] '{query}' → '{rewritten}'")
+                return rewritten, query
+            except Exception:
+                pass
+        return query, query
+
+    def chat(self, query: str, domain: str = None, top_k: int = None, history: list[dict] | None = None) -> dict:
+        """同步对话（非流式），支持多轮历史"""
+        if self.rag_retriever is None:
+            raise RuntimeError("请先调用 build_index() 或 load_index()")
+
+        self._ensure_llm()
+        search_query, _ = self._rewrite_query(query)
+
         # 检索
         config = SearchConfig(
             top_k=top_k or self.config.default_top_k,
@@ -162,7 +268,7 @@ class SecondBrainPipeline:
             vector_weight=self.config.vector_weight,
             domain_filter=domain,
         )
-        results = self.rag_retriever.retrieve(query, config)
+        results = self.rag_retriever.retrieve(search_query, config)
 
         if not results:
             return {
@@ -173,7 +279,7 @@ class SecondBrainPipeline:
 
         # 生成答案
         docs = [doc for doc, _ in results]
-        answer = self.llm_generator.generate(query, docs)
+        answer = self.llm_generator.generate(query, docs, history=history)
 
         # 构建来源信息
         sources = [
@@ -194,19 +300,13 @@ class SecondBrainPipeline:
             "query": query,
         }
 
-    async def chat_stream(self, query: str, domain: str = None, top_k: int = None) -> AsyncGenerator[str, None]:
-        """流式对话"""
+    async def chat_stream(self, query: str, domain: str = None, top_k: int = None, history: list[dict] | None = None) -> AsyncGenerator[str, None]:
+        """流式对话，支持多轮历史"""
         if self.rag_retriever is None:
             raise RuntimeError("请先调用 build_index() 或 load_index()")
 
-        if self.llm_generator is None:
-            llm_config = LLMConfig(
-                base_url=self.config.llm_base_url,
-                api_key=self.config.llm_api_key,
-                model=self.config.llm_model,
-                temperature=self.config.llm_temperature,
-            )
-            self.llm_generator = LLMGenerator(llm_config)
+        self._ensure_llm()
+        search_query, _ = self._rewrite_query(query)
 
         # 检索
         config = SearchConfig(
@@ -216,7 +316,7 @@ class SecondBrainPipeline:
             vector_weight=self.config.vector_weight,
             domain_filter=domain,
         )
-        results = self.rag_retriever.retrieve(query, config)
+        results = self.rag_retriever.retrieve(search_query, config)
 
         if not results:
             yield "抱歉，知识库中没有找到与您问题相关的内容。"
@@ -237,7 +337,7 @@ class SecondBrainPipeline:
         yield f"__SOURCES__:{json.dumps(sources, ensure_ascii=False)}\n"
 
         # 流式生成答案
-        async for chunk in self.llm_generator.generate_stream(query, docs):
+        async for chunk in self.llm_generator.generate_stream(query, docs, history=history):
             yield chunk
 
     def save_index(self, index_dir: str):

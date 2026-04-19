@@ -1,8 +1,11 @@
 """构建索引脚本
 
-用法: cd ~/projects/secondbrain-chat && source .venv/bin/activate && python scripts/build_index.py
+用法:
+  全量构建:   cd ~/projects/secondbrain-chat && source .venv/bin/activate && python scripts/build_index.py
+  增量构建:   python scripts/build_index.py --incremental
 """
 
+import argparse
 import os
 import sys
 from pathlib import Path
@@ -15,6 +18,10 @@ from src.retrievers.pipeline import SecondBrainPipeline, PipelineConfig
 
 
 def main():
+    parser = argparse.ArgumentParser(description="构建/更新知识库索引")
+    parser.add_argument("--incremental", action="store_true", help="增量模式：只处理变更文件")
+    args = parser.parse_args()
+
     vault_path = os.getenv(
         "VAULT_PATH",
         "/Users/zhangwenchao/Library/Mobile Documents/iCloud~md~obsidian/Documents/文超的笔记本"
@@ -29,16 +36,14 @@ def main():
     )
 
     pipeline = SecondBrainPipeline(config)
-    stats = pipeline.build_index()
+    stats = pipeline.build_index(incremental=args.incremental)
 
     import json
+    mode = "增量" if args.incremental else "全量"
     print(f"\n{'='*50}")
-    print("索引构建完成！")
+    print(f"索引构建完成（{mode}模式）！")
     print(json.dumps(stats, ensure_ascii=False, indent=2))
     print(f"{'='*50}")
-
-    # 启动 FastAPI 服务
-    print("\n💡 启动服务: cd ~/projects/secondbrain-chat && source .venv/bin/activate && uvicorn src.api.app:app --host 0.0.0.0 --port 8000")
 
 
 if __name__ == "__main__":

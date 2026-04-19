@@ -77,6 +77,7 @@ def split_note_to_chunks(note, text_splitter: RecursiveCharacterTextSplitter) ->
             "chunk_index": i,
             "total_chunks": len(chunks),
             "outbound_links": note.outbound_links,
+            "content_hash": note.content_hash,
         }
 
         doc = Document(page_content=chunk_text, metadata=metadata)

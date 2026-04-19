@@ -37,35 +37,55 @@ class LLMGenerator:
             base_url=self.config.base_url,
             api_key=self.config.api_key,
         )
+        self.total_prompt_tokens = 0
+        self.total_completion_tokens = 0
+        self.call_count = 0
 
-    def generate(self, query: str, context_docs: list) -> str:
-        """基于检索结果生成答案"""
-        context = self._build_context(context_docs)
-        prompt = self._build_prompt(query, context)
+    def _track_usage(self, response):
+        if hasattr(response, "usage") and response.usage:
+            self.total_prompt_tokens += response.usage.prompt_tokens or 0
+            self.total_completion_tokens += response.usage.completion_tokens or 0
+            self.call_count += 1
+
+    def get_usage_stats(self) -> dict:
+        return {
+            "total_prompt_tokens": self.total_prompt_tokens,
+            "total_completion_tokens": self.total_completion_tokens,
+            "total_tokens": self.total_prompt_tokens + self.total_completion_tokens,
+            "call_count": self.call_count,
+        }
+
+    def generate(
+        self,
+        query: str,
+        context_docs: list,
+        history: list[dict] | None = None,
+    ) -> str:
+        """基于检索结果生成答案，支持多轮对话历史"""
+        messages = self._build_messages(query, context_docs, history)
 
         response = self.client.chat.completions.create(
             model=self.config.model,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": prompt},
-            ],
+            messages=messages,
             temperature=self.config.temperature,
             max_tokens=self.config.max_tokens,
         )
 
+        self._track_usage(response)
         return response.choices[0].message.content
 
-    async def generate_stream(self, query: str, context_docs: list):
-        """流式生成答案"""
-        context = self._build_context(context_docs)
-        prompt = self._build_prompt(query, context)
+    async def generate_stream(
+        self,
+        query: str,
+        context_docs: list,
+        history: list[dict] | None = None,
+    ):
+        """流式生成答案，支持多轮对话历史"""
+        messages = self._build_messages(query, context_docs, history)
 
         stream = self.client.chat.completions.create(
             model=self.config.model,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": prompt},
-            ],
+            messages=messages,
             temperature=self.config.temperature,
             max_tokens=self.config.max_tokens,
             stream=True,
@@ -74,6 +94,22 @@ class LLMGenerator:
         for chunk in stream:
             if chunk.choices[0].delta.content:
                 yield chunk.choices[0].delta.content
+
+    def _build_messages(
+        self,
+        query: str,
+        context_docs: list,
+        history: list[dict] | None = None,
+    ) -> list[dict]:
+        """构建完整的 messages 列表（含历史）"""
+        context = self._build_context(context_docs)
+        current_prompt = self._build_prompt(query, context)
+
+        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        if history:
+            messages.extend(history)
+        messages.append({"role": "user", "content": current_prompt})
+        return messages
 
     def _build_context(self, docs: list) -> str:
         """构建检索结果上下文"""
