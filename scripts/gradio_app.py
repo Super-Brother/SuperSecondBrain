@@ -20,6 +20,7 @@ VAULT_PATH = os.getenv(
     "VAULT_PATH",
     "/Users/zhangwenchao/Library/Mobile Documents/iCloud~md~obsidian/Documents/文超的笔记本"
 )
+VAULT_NAME = VAULT_PATH.split("/")[-1]  # 提取 vault 名称用于 URL scheme
 
 pipeline: SecondBrainPipeline = None
 
@@ -43,27 +44,69 @@ def init_pipeline():
         return False
 
 
-def respond(message, chat_history, domain, top_k):
-    """对话回调"""
+def format_sources(sources: list[dict]) -> str:
+    """格式化来源为可点击的 Obsidian 链接"""
+    if not sources:
+        return ""
+
+    lines = ["\n\n📎 **参考来源：**"]
+    for i, src in enumerate(sources):
+        title = src.get("title", "")[:50]
+        score = src.get("score", 0)
+        source_file = src.get("source", "")
+
+        if source_file and VAULT_NAME + "/" in source_file:
+            # 提取相对路径
+            rel_path = source_file.split(VAULT_NAME + "/")[-1]
+            obs_url = f"obsidian://open?vault={VAULT_NAME}&file={rel_path}"
+            lines.append(f"\n{i+1}. [{title}]({obs_url}) — 相关度 {score:.2f}")
+        else:
+            lines.append(f"\n{i+1}. **{title}** — 相关度 {score:.2f}")
+
+    return "".join(lines)
+
+
+async def respond(message, chat_history, domain, top_k):
+    """对话回调（流式输出）"""
     if pipeline is None or pipeline.rag_retriever is None:
         chat_history.append((message, "⚠️ 知识库索引未加载，请先运行 `python scripts/build_index.py`。"))
-        return "", chat_history
+        yield "", chat_history
+        return
 
     domain_filter = None if domain == "全部" else domain
-    result = pipeline.chat(query=message, domain=domain_filter, top_k=int(top_k))
 
-    sources_text = ""
-    if result["sources"]:
-        sources_text = "\n\n📎 **参考来源：**\n"
-        for i, src in enumerate(result["sources"]):
-            title = src.get("title", "")[:60]
-            folder = src.get("folder", "")
-            score = src.get("score", 0)
-            sources_text += f"\n{i+1}. **{title}** ({folder}) — 相关度 {score:.2f}\n"
+    full_answer = ""
+    sources = []
 
-    answer = result["answer"] + sources_text
-    chat_history.append((message, answer))
-    return "", chat_history
+    try:
+        async for chunk in pipeline.chat_stream(query=message, domain=domain_filter, top_k=int(top_k)):
+            if chunk.startswith("__SOURCES__:"):
+                sources_json = chunk.replace("__SOURCES__:", "").strip()
+                sources = json.loads(sources_json)
+            else:
+                full_answer += chunk
+                # 增量更新 Chatbot
+                if chat_history and chat_history[-1][0] == message:
+                    chat_history[-1] = (message, full_answer + "▌")
+                else:
+                    chat_history.append((message, full_answer + "▌"))
+                yield "", chat_history
+    except Exception as e:
+        error_msg = f"⚠️ 生成失败: {str(e)}"
+        if chat_history and chat_history[-1][0] == message:
+            chat_history[-1] = (message, error_msg)
+        else:
+            chat_history.append((message, error_msg))
+        yield "", chat_history
+        return
+
+    # 最终答案 + 可点击来源
+    final_answer = full_answer + format_sources(sources)
+    if chat_history and chat_history[-1][0] == message:
+        chat_history[-1] = (message, final_answer)
+    else:
+        chat_history.append((message, final_answer))
+    yield "", chat_history
 
 
 def get_stats_fn():
