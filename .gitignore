@@ -10,3 +10,4 @@ data
 .env
 .env.server
 .env.docker
+.playwright-mcp

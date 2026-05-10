@@ -468,10 +468,16 @@ async function loadSessions() {{
     try {{
         const headers = token ? {{ 'Authorization': 'Bearer ' + token }} : {{}};
         const resp = await fetch('/api/v1/sessions', {{ headers }});
+        if (!resp.ok) {{
+            console.error('加载会话列表失败:', resp.status, resp.statusText);
+            return;
+        }}
         const data = await resp.json();
         sessions = data.sessions || [];
         renderSessions();
-    }} catch(e) {{}}
+    }} catch(e) {{
+        console.error('加载会话列表异常:', e);
+    }}
 }}
 
 function renderSessions() {{
@@ -505,8 +511,21 @@ async function newChat() {{
         const resp = await fetch('/api/v1/sessions', {{ method: 'POST', headers }});
         const data = await resp.json();
         currentSessionId = data.session_id;
-        document.getElementById('messages').innerHTML = '';
         document.getElementById('currentSessionTitle').textContent = '新对话';
+        // 重置为欢迎消息
+        document.getElementById('messages').innerHTML = `
+            <div class="max-w-2xl mx-auto flex flex-col gap-3">
+                <div class="flex items-center gap-2">
+                    <div class="w-7 h-7 rounded-full bg-primary-container flex items-center justify-center">
+                        <span class="material-symbols-outlined text-xs text-white">psychology</span>
+                    </div>
+                    <span class="text-xs font-medium text-on-surface/50">AI Assistant</span>
+                </div>
+                <div class="bg-surface-container-low p-4 rounded-xl text-on-surface text-sm leading-relaxed border-l-2 border-primary/30">
+                    你好！我是 SecondBrain Chat，基于你的知识库回答问题。试试问我点什么吧！
+                </div>
+            </div>
+        `;
         await loadSessions();
         if (window.innerWidth < 768) toggleHistoryDrawer();
     }} catch(e) {{}}
@@ -604,8 +623,20 @@ async function deleteSession(sessionId) {{
         await fetch('/api/v1/sessions/' + sessionId, {{ method: 'DELETE', headers }});
         if (currentSessionId === sessionId) {{
             currentSessionId = null;
-            document.getElementById('messages').innerHTML = '';
             document.getElementById('currentSessionTitle').textContent = '新对话';
+            document.getElementById('messages').innerHTML = `
+                <div class="max-w-2xl mx-auto flex flex-col gap-3">
+                    <div class="flex items-center gap-2">
+                        <div class="w-7 h-7 rounded-full bg-primary-container flex items-center justify-center">
+                            <span class="material-symbols-outlined text-xs text-white">psychology</span>
+                        </div>
+                        <span class="text-xs font-medium text-on-surface/50">AI Assistant</span>
+                    </div>
+                    <div class="bg-surface-container-low p-4 rounded-xl text-on-surface text-sm leading-relaxed border-l-2 border-primary/30">
+                        你好！我是 SecondBrain Chat，基于你的知识库回答问题。试试问我点什么吧！
+                    </div>
+                </div>
+            `;
         }}
         await loadSessions();
     }} catch(e) {{}}

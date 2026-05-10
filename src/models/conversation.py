@@ -75,8 +75,8 @@ class ConversationManager:
         self.conn.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
         self.conn.commit()
 
-    def list_sessions(self, limit: int = 50, include_empty: bool = False) -> list[dict]:
-        """列出会话，默认过滤掉 0 消息的空会话（避免侧边栏被幽灵会话淹没）。"""
+    def list_sessions(self, limit: int = 50, include_empty: bool = True) -> list[dict]:
+        """列出会话，默认保留空会话（新建对话后应立即可见）。"""
         sql = (
             "SELECT s.session_id, s.created_at, s.updated_at, "
             "(SELECT COUNT(*) FROM messages m WHERE m.session_id = s.session_id) as msg_count "

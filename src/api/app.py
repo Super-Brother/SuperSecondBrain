@@ -385,7 +385,7 @@ async def chat_stream(request: Request, body: ChatRequest):
                 yield f"data: {json.dumps({'type': 'answer', 'content': chunk}, ensure_ascii=False)}\n\n"
 
         yield f"data: {json.dumps({'type': 'done', 'session_id': session_id}, ensure_ascii=False)}\n\n"
-        _save_turn(session_id, request.query, full_answer)
+        _save_turn(session_id, body.query, full_answer)
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
