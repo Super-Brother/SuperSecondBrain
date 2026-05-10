@@ -107,7 +107,7 @@ docker-compose -f docker-compose.full.yml up -d
 | Web 框架 | FastAPI |
 | 前端 | Gradio / Streamlit / 内嵌 HTML |
 | 文档解析 | PyMuPDF / python-docx / python-pptx / openpyxl |
-| Embedding | BAAI/bge-large-zh-v1.5 (768d) |
+| Embedding | BAAI/bge-large-zh-v1.5 (1024d) |
 | 向量数据库 | FAISS (IndexFlatIP, L2归一化=余弦相似度) / Milvus (HNSW, 分布式) |
 | 关键词检索 | rank-bm25 + jieba |
 | Reranker | BAAI/bge-reranker-base (CrossEncoder) |

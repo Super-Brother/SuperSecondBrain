@@ -26,7 +26,7 @@ Prompt构建 → LLM生成 → 答案脱敏 → 答案+来源引用
 |------|----------|------|
 | 文档解析 | ✅ | `DocumentRouter` 支持 `.md` `.pdf` `.docx` `.pptx` `.xlsx`，自动路由对应解析器 |
 | 文本切片 | ✅ | 中文优化的 `RecursiveCharacterTextSplitter`，按二级标题→段落→句号→逗号优先级切分 |
-| 向量化 | ✅ | `BAAI/bge-large-zh-v1.5` (768d)，延迟加载 |
+| 向量化 | ✅ | `BAAI/bge-large-zh-v1.5` (1024d)，延迟加载 |
 | 存储 | ✅ | FAISS（本地）/ Milvus（分布式），`VECTOR_STORE_BACKEND` 环境变量切换 |
 
 **② 在线检索链路（Retrieval Pipeline）**
