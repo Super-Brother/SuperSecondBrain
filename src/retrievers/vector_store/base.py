@@ -48,7 +48,11 @@ class VectorStore(ABC):
             from sentence_transformers import SentenceTransformer
             import os
             model_name = os.getenv("EMBEDDING_MODEL", "BAAI/bge-large-zh-v1.5")
-            self._embedder = SentenceTransformer(model_name)
+            cache_dir = os.getenv("SENTENCE_TRANSFORMERS_HOME")
+            kwargs = {}
+            if cache_dir:
+                kwargs["cache_folder"] = cache_dir
+            self._embedder = SentenceTransformer(model_name, **kwargs)
         return self._embedder
 
     @abstractmethod

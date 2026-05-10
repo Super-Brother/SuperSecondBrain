@@ -276,8 +276,13 @@ class RAGRetriever:
     def reranker(self):
         if self._reranker is None:
             from sentence_transformers import CrossEncoder
+            import os
             model_name = os.getenv("RERANKER_MODEL", "BAAI/bge-reranker-base")
-            self._reranker = CrossEncoder(model_name)
+            cache_dir = os.getenv("SENTENCE_TRANSFORMERS_HOME")
+            kwargs = {}
+            if cache_dir:
+                kwargs["model_kwargs"] = {"cache_dir": cache_dir}
+            self._reranker = CrossEncoder(model_name, **kwargs)
         return self._reranker
 
     def retrieve(self, query: str, config: SearchConfig = None) -> list[tuple[Document, float]]:

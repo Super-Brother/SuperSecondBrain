@@ -24,7 +24,7 @@ class QueryRewriter:
         self.client = OpenAI(base_url=base_url, api_key=api_key)
         self.model = model
 
-    def rewrite(self, query: str) -> str:
+    def rewrite(self, query: str, timeout: float = 5.0) -> str:
         """将口语化查询改写为检索友好的关键词"""
         response = self.client.chat.completions.create(
             model=self.model,
@@ -34,6 +34,7 @@ class QueryRewriter:
             ],
             temperature=0.0,
             max_tokens=128,
+            timeout=timeout,
         )
         rewritten = response.choices[0].message.content.strip()
         # 如果改写失败或太长，回退到原始查询

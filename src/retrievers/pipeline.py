@@ -44,7 +44,7 @@ class PipelineConfig:
     default_rerank_top_k: int = 5
     bm25_weight: float = 0.3
     vector_weight: float = 0.7
-    enable_query_rewrite: bool = True
+    enable_query_rewrite: bool = False
 
 
 class SecondBrainPipeline:
@@ -222,6 +222,32 @@ class SecondBrainPipeline:
                 self._stats = json.load(f)
 
         print(f"✅ 索引加载完成（{self.vector_retriever.index.ntotal} 个向量）")
+
+    def warmup(self):
+        """预热：预加载所有延迟初始化的组件（Reranker、LLM、Embedder）"""
+        print("[Warmup] 开始预热...")
+
+        # 1. 预热 Reranker（最耗时，模型几百MB）
+        if self.rag_retriever is not None:
+            try:
+                _ = self.rag_retriever.reranker
+                print("[Warmup] Reranker 加载完成")
+            except Exception as e:
+                print(f"[Warmup] Reranker 加载失败: {e}")
+
+        # 2. 预热 Embedding（触发 embedder 加载）
+        if self.vector_retriever is not None:
+            try:
+                _ = self.vector_retriever.embedder
+                print("[Warmup] Embedding 加载完成")
+            except Exception as e:
+                print(f"[Warmup] Embedding 加载失败: {e}")
+
+        # 3. 预热 LLM（初始化客户端）
+        self._ensure_llm()
+        print("[Warmup] LLM 客户端初始化完成")
+
+        print("[Warmup] 预热完成")
 
     def _ensure_llm(self):
         """延迟初始化 LLM 和 QueryRewriter"""

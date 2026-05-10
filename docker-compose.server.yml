@@ -5,14 +5,17 @@ services:
   api:
     build: .
     ports:
-      - "8000:8000"
+      - "8001:8000"
     env_file:
       - .env.server
     environment:
       - VECTOR_STORE_BACKEND=faiss
       - REDIS_URL=redis://redis:6379/0
+      - HF_ENDPOINT=https://hf-mirror.com
+      - SENTENCE_TRANSFORMERS_HOME=/app/data/models
     volumes:
       - ./data:/app/data
+      - huggingface_cache:/root/.cache/huggingface
     depends_on:
       - redis
     restart: unless-stopped
@@ -25,3 +28,4 @@ services:
 
 volumes:
   redis_data:
+  huggingface_cache:
