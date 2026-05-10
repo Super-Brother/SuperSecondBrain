@@ -1,0 +1,48 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.venv
+venv/
+*.egg-info
+.pytest_cache
+
+# 模型文件（体积巨大，运行时通过 volume 挂载）
+data/models/
+
+# 索引数据（运行时生成）
+data/index/
+
+# 环境配置
+.env
+.env.*
+.env.example
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# 日志和临时文件
+*.log
+.DS_Store
+*.tmp
+
+# Docker 相关
+docker-compose*.yml
+Dockerfile*
+
+# 文档和测试
+tests/
+docs/
+README.md
+CLAUDE.md
+
+# 部署脚本
+deploy*.sh
