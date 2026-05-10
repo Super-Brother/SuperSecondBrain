@@ -17,6 +17,8 @@ from pathlib import Path
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
+from src.parsers.document_router import PARSER_MAP
+
 log = logging.getLogger(__name__)
 
 
@@ -52,8 +54,8 @@ class VaultEventHandler(FileSystemEventHandler):
 
         path = Path(event.src_path)
 
-        # 只处理 .md 文件
-        if path.suffix.lower() != ".md":
+        # 支持所有 DocumentRouter 注册的格式
+        if path.suffix.lower() not in PARSER_MAP:
             return False
 
         # 排除特定目录

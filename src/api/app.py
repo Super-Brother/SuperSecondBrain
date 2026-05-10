@@ -1,14 +1,18 @@
 """FastAPI 应用入口"""
 
+import hashlib
+import hmac
 import json
 import os
+import subprocess
 import sys
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, File, Request, UploadFile
+from fastapi import status as http_status
 
 load_dotenv()
 from fastapi.middleware.cors import CORSMiddleware
@@ -39,6 +43,13 @@ VAULT_PATH = os.getenv(
     "/Users/zhangwenchao/Library/Mobile Documents/iCloud~md~obsidian/Documents/文超的笔记本"
 )
 INDEX_DIR = os.getenv("INDEX_DIR", "data/index")
+
+# 同步配置
+SYNC_WEBHOOK_SECRET = os.getenv("SYNC_WEBHOOK_SECRET", "")
+SYNC_SCRIPT_PATH = os.getenv("SYNC_SCRIPT_PATH", "")
+
+# 文件上传限制
+MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50MB
 
 # ---- 全局状态 ----
 
@@ -182,6 +193,16 @@ class SendCodeRequest(BaseModel):
 class VerifyCodeRequest(BaseModel):
     email: str
     code: str
+
+
+class WebhookPayload(BaseModel):
+    ref: str | None = None
+    repository: dict | None = None
+    commits: list | None = None
+
+
+class SyncTriggerRequest(BaseModel):
+    incremental: bool = True
 
 
 # ---- 辅助 ----
@@ -442,6 +463,242 @@ async def me(request: Request):
 @app.get("/", response_class=HTMLResponse)
 async def index():
     return HTML_TEMPLATE
+
+
+# ---- 同步与文档管理 ----
+
+@app.post("/api/v1/sync/webhook")
+async def sync_webhook(request: Request):
+    """接收 GitHub/GitLab webhook，自动同步 vault 并重建索引"""
+    body = await request.body()
+
+    # 验证 webhook signature
+    if SYNC_WEBHOOK_SECRET:
+        signature = request.headers.get("X-Hub-Signature-256", "")
+        expected = "sha256=" + hmac.new(
+            SYNC_WEBHOOK_SECRET.encode(), body, hashlib.sha256
+        ).hexdigest()
+        if not hmac.compare_digest(signature, expected):
+            return JSONResponse(
+                status_code=http_status.HTTP_401_UNAUTHORIZED,
+                content={"error": "Invalid webhook signature"},
+            )
+
+    # 执行同步
+    sync_output = ""
+    sync_error = ""
+    try:
+        if SYNC_SCRIPT_PATH and os.path.exists(SYNC_SCRIPT_PATH):
+            result = subprocess.run(
+                [SYNC_SCRIPT_PATH],
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+        elif os.path.exists(os.path.join(VAULT_PATH, ".git")):
+            result = subprocess.run(
+                ["git", "-C", VAULT_PATH, "pull"],
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+        else:
+            return JSONResponse(
+                status_code=http_status.HTTP_400_BAD_REQUEST,
+                content={"error": "No sync method configured. Set SYNC_SCRIPT_PATH or ensure vault is a git repo."},
+            )
+        sync_output = result.stdout
+        sync_error = result.stderr
+        if result.returncode != 0:
+            return JSONResponse(
+                status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content={"error": f"Sync failed: {sync_error}", "stdout": sync_output},
+            )
+    except subprocess.TimeoutExpired:
+        return JSONResponse(
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"error": "Sync timed out after 120s"},
+        )
+    except Exception as e:
+        return JSONResponse(
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"error": f"Sync error: {str(e)}"},
+        )
+
+    # 触发索引重建（多格式全量重建，确保所有格式都被索引）
+    try:
+        if pipeline is None:
+            return JSONResponse(
+                status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+                content={"error": "Pipeline not initialized"},
+            )
+        stats = pipeline.rebuild_index_from_vault()
+    except Exception as e:
+        return JSONResponse(
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={
+                "error": f"Rebuild failed: {str(e)}",
+                "sync_output": sync_output,
+            },
+        )
+
+    return {
+        "status": "ok",
+        "sync_output": sync_output,
+        "rebuild_stats": stats,
+    }
+
+
+@app.post("/api/v1/sync/trigger")
+async def sync_trigger(body: SyncTriggerRequest | None = None):
+    """手动触发索引重建"""
+    if pipeline is None:
+        return JSONResponse(
+            status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={"error": "Pipeline not initialized"},
+        )
+
+    incremental = body.incremental if body else True
+    try:
+        if incremental:
+            stats = pipeline.build_index(incremental=True)
+        else:
+            stats = pipeline.rebuild_index_from_vault()
+    except Exception as e:
+        return JSONResponse(
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"error": str(e)},
+        )
+
+    return {"status": "ok", "rebuild_stats": stats}
+
+
+@app.post("/api/v1/documents/upload")
+async def upload_document(file: UploadFile = File(...)):
+    """上传单个文档到 vault 并触发索引重建"""
+    from src.parsers.document_router import PARSER_MAP
+
+    # 验证文件类型
+    ext = Path(file.filename).suffix.lower()
+    if ext not in PARSER_MAP:
+        return JSONResponse(
+            status_code=http_status.HTTP_400_BAD_REQUEST,
+            content={"error": f"Unsupported file type: {ext}. Supported: {list(PARSER_MAP.keys())}"},
+        )
+
+    # 安全处理文件名
+    safe_name = Path(file.filename).name
+    if safe_name.startswith(".") or "/" in safe_name or "\\" in safe_name:
+        return JSONResponse(
+            status_code=http_status.HTTP_400_BAD_REQUEST,
+            content={"error": "Invalid filename"},
+        )
+
+    # 保存文件
+    vault_path = Path(VAULT_PATH)
+    vault_path.mkdir(parents=True, exist_ok=True)
+    file_path = vault_path / "uploads" / safe_name
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        content = await file.read()
+        if len(content) > MAX_UPLOAD_SIZE:
+            return JSONResponse(
+                status_code=http_status.HTTP_400_BAD_REQUEST,
+                content={"error": f"File too large (max {MAX_UPLOAD_SIZE // 1024 // 1024}MB)"},
+            )
+        with open(file_path, "wb") as f:
+            f.write(content)
+    except Exception as e:
+        return JSONResponse(
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"error": f"Failed to save file: {str(e)}"},
+        )
+
+    # 触发增量重建
+    try:
+        if pipeline is None:
+            return JSONResponse(
+                status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+                content={"error": "Pipeline not initialized"},
+            )
+        stats = pipeline.rebuild_index_from_vault()
+    except Exception as e:
+        return JSONResponse(
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"error": f"Index rebuild failed: {str(e)}"},
+        )
+
+    return {
+        "status": "ok",
+        "filename": safe_name,
+        "saved_path": str(file_path.relative_to(vault_path)),
+        "rebuild_stats": stats,
+    }
+
+
+@app.post("/api/v1/documents/batch-upload")
+async def batch_upload_documents(files: list[UploadFile] = File(...)):
+    """批量上传文档到 vault 并触发索引重建"""
+    from src.parsers.document_router import PARSER_MAP
+
+    if len(files) > 20:
+        return JSONResponse(
+            status_code=http_status.HTTP_400_BAD_REQUEST,
+            content={"error": "Too many files (max 20)"},
+        )
+
+    vault_path = Path(VAULT_PATH)
+    vault_path.mkdir(parents=True, exist_ok=True)
+    upload_dir = vault_path / "uploads"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+
+    saved_files = []
+    errors = []
+
+    for file in files:
+        ext = Path(file.filename).suffix.lower()
+        if ext not in PARSER_MAP:
+            errors.append({"filename": file.filename, "error": f"Unsupported type: {ext}"})
+            continue
+
+        safe_name = Path(file.filename).name
+        if safe_name.startswith(".") or "/" in safe_name or "\\" in safe_name:
+            errors.append({"filename": file.filename, "error": "Invalid filename"})
+            continue
+
+        file_path = upload_dir / safe_name
+        try:
+            content = await file.read()
+            if len(content) > MAX_UPLOAD_SIZE:
+                errors.append({"filename": file.filename, "error": "File too large"})
+                continue
+            with open(file_path, "wb") as f:
+                f.write(content)
+            saved_files.append(safe_name)
+        except Exception as e:
+            errors.append({"filename": file.filename, "error": str(e)})
+
+    # 触发重建
+    try:
+        if pipeline is None:
+            return JSONResponse(
+                status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+                content={"error": "Pipeline not initialized"},
+            )
+        stats = pipeline.rebuild_index_from_vault()
+    except Exception as e:
+        return JSONResponse(
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"error": f"Index rebuild failed: {str(e)}"},
+        )
+
+    return {
+        "status": "ok",
+        "saved_files": saved_files,
+        "errors": errors,
+        "rebuild_stats": stats,
+    }
 
 
 if __name__ == "__main__":

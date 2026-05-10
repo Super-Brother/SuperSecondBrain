@@ -378,6 +378,78 @@ class SecondBrainPipeline:
         """获取知识库统计信息"""
         return self._stats
 
+    def rebuild_index_from_vault(self, vault_path: str = None, chunk_size: int = None):
+        """从 vault 目录全量重建索引，支持多格式（.md / .pdf / .docx / .pptx / .xlsx）
+
+        与 build_index() 的区别：
+        - build_index() 使用 ObsidianParser，只处理 .md
+        - rebuild_index_from_vault() 使用 DocumentRouter，处理所有注册格式
+        """
+        vault_path = vault_path or self.config.vault_path
+        chunk_size = chunk_size or self.config.chunk_size
+
+        from src.parsers.document_router import DocumentRouter
+
+        print(f"📂 多格式解析 vault: {vault_path}")
+        router = DocumentRouter(vault_path, use_obsidian=True)
+        all_docs = router.parse_directory(vault_path)
+        print(f"📄 解析到 {len(all_docs)} 个文档 chunks")
+
+        # 补齐元数据（与 Obsidian 解析路径对齐）
+        from src.parsers.obsidian_parser import classify_domain
+        vault_path_obj = Path(vault_path)
+        for doc in all_docs:
+            source = doc.metadata.get("source_file", "")
+            try:
+                rel_path = str(Path(source).relative_to(vault_path_obj))
+            except ValueError:
+                rel_path = source
+
+            if "relative_path" not in doc.metadata:
+                doc.metadata["relative_path"] = rel_path
+            if "content_hash" not in doc.metadata:
+                doc.metadata["content_hash"] = hashlib.md5(doc.page_content.encode()).hexdigest()
+            if "domain" not in doc.metadata:
+                folder = doc.metadata.get("folder", "")
+                doc.metadata["domain"] = classify_domain(folder)
+
+        # 统计
+        from collections import Counter
+        domains = Counter(doc.metadata.get("domain", "其他") for doc in all_docs)
+        sources = set(doc.metadata.get("relative_path", "") for doc in all_docs)
+        self._stats = {
+            "total_notes": len(sources),
+            "total_chunks": len(all_docs),
+            "domain_distribution": dict(domains.most_common()),
+        }
+        print(f"📊 领域分布: {dict(domains.most_common())}")
+
+        # 重建索引
+        self.vector_retriever = VectorRetriever()
+        self.vector_retriever.build_index(all_docs)
+
+        self.bm25_retriever = BM25Retriever()
+        self.bm25_retriever.build_index(all_docs)
+
+        self.hybrid_retriever = HybridRetriever(self.vector_retriever, self.bm25_retriever)
+        self.rag_retriever = RAGRetriever(self.hybrid_retriever)
+
+        self.save_index(self.config.index_dir)
+
+        # 生成 manifest（全量）
+        manifest = {}
+        for doc in all_docs:
+            rp = doc.metadata.get("relative_path", "")
+            h = doc.metadata.get("content_hash", "")
+            if rp and h:
+                manifest[rp] = h
+        manifest_path = os.path.join(self.config.index_dir, "manifest.json")
+        with open(manifest_path, "w") as f:
+            json.dump(manifest, f, ensure_ascii=False, indent=2)
+
+        print(f"✅ 多格式索引重建完成，已保存到 {self.config.index_dir}")
+        return self._stats
+
 
 if __name__ == "__main__":
     # 测试完整流水线
