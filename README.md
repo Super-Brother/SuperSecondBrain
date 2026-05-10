@@ -67,6 +67,7 @@ Prompt构建 → LLM生成 → 答案脱敏 → 答案+来源引用
 ### 基础能力
 - **多轮对话记忆** — 基于 SQLite 的会话管理，支持上下文追问
 - **增量索引** — 文件变更检测，只重建变更部分
+- **Vault 自动同步** — watchdog 监听 Obsidian vault 目录，文件变更后自动触发增量索引重建
 - **查询改写** — LLM 将口语化查询转为检索关键词
 - **混合检索** — BM25 关键词匹配 + 向量语义检索，分数加权融合
 - **Rerank 重排序** — Cross-Encoder 精排，提升 Top-K 准确率
@@ -89,7 +90,7 @@ Prompt构建 → LLM生成 → 答案脱敏 → 答案+来源引用
 |------|------|------|
 | Web 框架 | FastAPI | 高性能异步 API |
 | 前端 | Streamlit / Gradio / 内嵌 HTML | 多前端可选 |
-| Embedding | BAAI/bge-large-zh-v1.5 | 768 维，中文优化 |
+| Embedding | BAAI/bge-large-zh-v1.5 | 1024 维，中文优化 |
 | 向量数据库 | FAISS / Milvus | 本地 / 分布式可切换 |
 | 关键词检索 | rank-bm25 + jieba | 中文分词 |
 | Reranker | BAAI/bge-reranker-base | Cross-Encoder |
@@ -188,6 +189,10 @@ results = rag_retriever.retrieve(query, config)
 | POST | `/api/v1/chat/stream` | 对话（SSE 流式） |
 | GET | `/api/v1/domains` | 领域列表 |
 | POST | `/api/v1/feedback` | 提交反馈 |
+| POST | `/api/v1/sync/webhook` | Webhook 同步触发（支持 GitHub/GitLab） |
+| POST | `/api/v1/sync/trigger` | 手动触发索引同步 |
+| POST | `/api/v1/documents/upload` | 单文件上传 |
+| POST | `/api/v1/documents/batch-upload` | 批量文件上传 |
 
 ## 项目结构
 
@@ -217,7 +222,8 @@ secondbrain-chat/
 │   │   ├── logger.py              # 日志
 │   │   ├── cache.py               # 响应缓存
 │   │   ├── sanitizer.py           # 数据脱敏
-│   │   └── metrics.py             # 监控指标
+│   │   ├── metrics.py             # 监控指标
+│   │   └── vault_watcher.py       # Vault 文件监控（自动同步）
 │   ├── evaluation/           # 评估
 │   │   └── rag_evaluator.py       # RAGAS 评估器
 │   └── api/                  # API
@@ -231,7 +237,11 @@ secondbrain-chat/
 ├── tests/                    # 测试
 ├── data/index/               # 索引文件
 ├── Dockerfile
-├── docker-compose.yml        # 企业级全栈部署
+├── docker-compose.yml        # 轻量部署（推荐）
+├── docker-compose.server.yml # 服务器部署（FAISS + Redis）
+├── docker-compose.full.yml   # 企业级全栈部署（Milvus + vLLM）
+├── deploy_server.sh          # 服务器一键部署脚本
+├── DEPLOY.md                 # 服务器部署指南
 ├── prometheus.yml            # Prometheus 配置
 └── requirements.txt
 ```
@@ -279,6 +289,26 @@ LLM_MODEL=deepseek-chat
 # SMTP_USER=yourname@126.com
 # SMTP_PASSWORD=授权码
 ```
+
+### 服务器部署（FAISS 版）
+
+适用于无 GPU 的服务器，使用 FAISS + 外部 LLM API，国内镜像源优化：
+
+```bash
+# 一键部署（推荐）
+./deploy_server.sh
+
+# 或手动部署
+docker compose -f docker-compose.server.yml up -d
+```
+
+**包含服务：**
+| 服务 | 地址 | 说明 |
+|------|------|------|
+| API | `:8000` | FastAPI 主服务 |
+| Redis | 内部 | 分布式缓存 |
+
+**配置文件：** `.env.server`（参考 `.env.server.example`）
 
 ### 企业级完整部署
 

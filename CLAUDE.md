@@ -38,6 +38,12 @@ python -c "from src.evaluation import RAGEvaluator; RAGEvaluator()"
 # Docker 轻量部署（推荐）
 docker-compose up -d
 
+# Docker 服务器部署（FAISS + Redis，国内镜像源优化）
+docker compose -f docker-compose.server.yml up -d
+
+# 一键服务器部署脚本（含代理检测、索引构建）
+./deploy_server.sh
+
 # Docker 企业级完整部署（含 Milvus + vLLM）
 docker-compose -f docker-compose.full.yml up -d
 ```
@@ -86,7 +92,8 @@ docker-compose -f docker-compose.full.yml up -d
 - **src/utils/sanitizer.py**: 数据脱敏（Query / Document / Answer），支持手机号、身份证号、邮箱、银行卡号
 - **src/evaluation/rag_evaluator.py**: RAGAS 自动化评估 + 启发式降级评估，指标：faithfulness / answer_relevancy / context_recall / context_precision
 - **src/utils/metrics.py**: Prometheus 风格指标收集，支持延迟分位数（P50/P95/P99）、Token 使用量、成功率
-- **src/api/app.py**: FastAPI 端点 `/health` `/stats` `/api/v1/chat` `/api/v1/chat/stream` `/api/v1/domains`，启动时自动加载索引
+- **src/utils/vault_watcher.py**: watchdog 文件监控器，监听 vault 目录变更自动触发增量索引重建；防抖（默认 5s）、过滤非文档文件、线程安全加锁
+- **src/api/app.py**: FastAPI 端点 `/health` `/stats` `/api/v1/chat` `/api/v1/chat/stream` `/api/v1/domains` `/api/v1/sync/webhook` `/api/v1/sync/trigger` `/api/v1/documents/upload` `/api/v1/documents/batch-upload`，启动时自动加载索引
 - **scripts/**: `build_index.py` 构建索引，`gradio_app.py` Gradio 前端
 
 ### 关键设计
@@ -98,6 +105,8 @@ docker-compose -f docker-compose.full.yml up -d
 - **索引持久化**: FAISS 索引 (`faiss.index`) + pickle 序列化的 BM25 和 documents，存储在 `data/index/`；Milvus 数据持久化在服务端
 - **延迟加载**: Embedding 模型和 Reranker 通过 `@property` 延迟初始化，避免启动时加载大模型
 - **数据脱敏**: 三级脱敏架构，可在 `.env` 中独立开关 Query / Document / Answer 脱敏
+- **Vault 自动同步**: `AUTO_SYNC=true` 启用 watchdog 监听 vault 目录，文件变更后防抖触发增量索引重建（`AUTO_SYNC_DEBOUNCE` 控制延迟），排除 `.obsidian/.trash/.git` 等目录
+- **服务器轻量部署**: `docker-compose.server.yml` 使用 FAISS + Redis，Dockerfile 配置国内镜像源（清华 PyPI + 阿里云 Debian），`deploy_server.sh` 一键部署含代理检测
 - **环境变量**: 所有配置通过 `.env` 管理，见 `.env.example`
 
 ## Tech Stack
