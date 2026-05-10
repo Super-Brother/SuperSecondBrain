@@ -30,84 +30,116 @@ class SearchConfig:
     bm25_weight: float = 0.3  # BM25 分数权重
     vector_weight: float = 0.7 # 向量分数权重
     domain_filter: str | None = None  # 领域过滤
+    # 权限过滤（企业级）
+    user_departments: list[str] | None = None  # 用户所属部门
+    user_access_level: int | None = None      # 用户访问级别
 
 
 class VectorRetriever:
-    """FAISS 向量检索器"""
+    """向量检索器 — 支持 FAISS（本地）和 Milvus（分布式）后端"""
 
-    def __init__(self, embedding_dim: int = None):
-        self.embedding_dim = embedding_dim  # None 表示从模型自动推断
-        self.index = None  # 延迟初始化
-        self.documents: list[Document] = []
+    def __init__(self, embedding_dim: int = None, backend: str = None):
+        self.embedding_dim = embedding_dim
+        self.backend = backend or os.getenv("VECTOR_STORE_BACKEND", "faiss")
+        self._store = None
         self._embedder = None
 
     @property
+    def store(self):
+        if self._store is None:
+            from src.retrievers.vector_store import FAISSVectorStore, MilvusVectorStore, VectorStoreConfig
+
+            config = VectorStoreConfig(embedding_dim=self.embedding_dim or 768)
+            if self.backend == "milvus":
+                config.host = os.getenv("MILVUS_HOST", "localhost")
+                config.port = int(os.getenv("MILVUS_PORT", "19530"))
+                config.collection_name = os.getenv("MILVUS_COLLECTION", "enterprise_kb")
+                config.index_type = os.getenv("MILVUS_INDEX_TYPE", "HNSW")
+                config.metric_type = os.getenv("MILVUS_METRIC_TYPE", "COSINE")
+                config.enable_acl = os.getenv("MILVUS_ENABLE_ACL", "false").lower() == "true"
+                self._store = MilvusVectorStore(config)
+            else:
+                self._store = FAISSVectorStore(config)
+        return self._store
+
+    @property
     def embedder(self):
-        if self._embedder is None:
-            from sentence_transformers import SentenceTransformer
-            model_name = os.getenv("EMBEDDING_MODEL", "BAAI/bge-large-zh-v1.5")
-            self._embedder = SentenceTransformer(model_name)
-        return self._embedder
+        return self.store.embedder
+
+    @property
+    def documents(self) -> list[Document]:
+        return self.store.documents
+
+    @property
+    def index(self):
+        """兼容旧代码，仅在 FAISS 后端有效"""
+        if hasattr(self.store, "index"):
+            return self.store.index
+        return None
 
     def build_index(self, documents: list[Document]):
         """构建向量索引"""
-        self.documents = documents
+        print(f"[VectorRetriever] 正在对 {len(documents)} 个 chunks 做 Embedding...")
         texts = [doc.page_content for doc in documents]
-
-        print(f"[VectorRetriever] 正在对 {len(texts)} 个 chunks 做 Embedding...")
         embeddings = self.embedder.encode(texts, show_progress_bar=True, batch_size=64)
-        embeddings = np.array(embeddings, dtype=np.float32)
 
-        # 自动推断维度
         if self.embedding_dim is None:
             self.embedding_dim = embeddings.shape[1]
             print(f"[VectorRetriever] Embedding 维度: {self.embedding_dim}")
 
-        # 归一化（用于余弦相似度）
-        faiss.normalize_L2(embeddings)
+        self.store.add_documents(documents, embeddings=embeddings.tolist())
+        stats = self.store.get_stats()
+        print(f"[VectorRetriever] 索引构建完成，共 {stats.get('total_vectors', 0)} 个向量")
 
-        if self.index is None:
-            self.index = faiss.IndexFlatIP(self.embedding_dim)
-        self.index.add(embeddings)
-        print(f"[VectorRetriever] 索引构建完成，共 {self.index.ntotal} 个向量")
+    def search(
+        self,
+        query: str,
+        top_k: int = 10,
+        domain: str | None = None,
+        user_departments: list[str] | None = None,
+        user_access_level: int | None = None,
+    ) -> list[tuple[Document, float]]:
+        """向量检索，支持领域过滤和权限过滤"""
+        filter_expr = None
+        if domain:
+            filter_expr = {"domain": domain}
 
-    def search(self, query: str, top_k: int = 10, domain: str | None = None) -> list[tuple[Document, float]]:
-        """向量检索"""
-        query_vec = self.embedder.encode([query])
-        query_vec = np.array(query_vec, dtype=np.float32)
-        faiss.normalize_L2(query_vec)
+        # Milvus 权限过滤：通过元数据过滤表达式
+        if self.backend == "milvus" and user_departments is not None and user_access_level is not None:
+            dept_list = ", ".join(f'"{d}"' for d in user_departments)
+            acl_expr = f'department in [{dept_list}] and access_level <= {user_access_level}'
+            if filter_expr:
+                # 合并过滤条件
+                filter_expr = f"{filter_expr} and {acl_expr}"
+            else:
+                filter_expr = acl_expr
 
-        # 如果需要领域过滤，扩大检索范围再过滤
-        search_k = top_k * 5 if domain else top_k
-        scores, indices = self.index.search(query_vec, search_k)
+        results = self.store.search(query_text=query, top_k=top_k, filter_expr=filter_expr)
 
-        results = []
-        for score, idx in zip(scores[0], indices[0]):
-            if idx < 0:
-                continue
-            doc = self.documents[idx]
-            # 领域过滤
-            if domain and doc.metadata.get("domain") != domain:
-                continue
-            results.append((doc, float(score)))
-            if len(results) >= top_k:
-                break
+        # FAISS 权限过滤：内存过滤（ Milvus 已在服务端过滤）
+        if self.backend != "milvus" and user_departments is not None and user_access_level is not None:
+            filtered = []
+            for r in results:
+                doc = r.document
+                doc_depts = doc.metadata.get("department", ["default"])
+                if isinstance(doc_depts, str):
+                    doc_depts = [doc_depts]
+                doc_level = doc.metadata.get("access_level", 0)
+                if any(d in doc_depts for d in user_departments) and doc_level <= user_access_level:
+                    filtered.append(r)
+            results = filtered
 
-        return results
+        return [(r.document, r.score) for r in results]
 
     def save(self, path: str):
         """保存索引"""
-        os.makedirs(path, exist_ok=True)
-        faiss.write_index(self.index, os.path.join(path, "faiss.index"))
-        with open(os.path.join(path, "documents.pkl"), "wb") as f:
-            pickle.dump(self.documents, f)
+        self.store.save(path)
 
     def load(self, path: str):
         """加载索引"""
-        self.index = faiss.read_index(os.path.join(path, "faiss.index"))
-        with open(os.path.join(path, "documents.pkl"), "rb") as f:
-            self.documents = pickle.load(f)
-        print(f"[VectorRetriever] 加载索引完成，共 {self.index.ntotal} 个向量")
+        self.store.load(path)
+        stats = self.store.get_stats()
+        print(f"[VectorRetriever] 加载索引完成，共 {stats.get('total_vectors', 0)} 个向量")
 
 
 class BM25Retriever:
@@ -127,8 +159,15 @@ class BM25Retriever:
         self.bm25 = BM25Okapi(self.tokenized_corpus)
         print(f"[BM25Retriever] 索引构建完成，共 {len(documents)} 个文档")
 
-    def search(self, query: str, top_k: int = 10, domain: str | None = None) -> list[tuple[Document, float]]:
-        """BM25 检索"""
+    def search(
+        self,
+        query: str,
+        top_k: int = 10,
+        domain: str | None = None,
+        user_departments: list[str] | None = None,
+        user_access_level: int | None = None,
+    ) -> list[tuple[Document, float]]:
+        """BM25 检索，支持领域过滤和权限过滤"""
         tokenized_query = list(jieba.cut(query))
         scores = self.bm25.get_scores(tokenized_query)
 
@@ -145,6 +184,14 @@ class BM25Retriever:
             doc = self.documents[idx]
             if domain and doc.metadata.get("domain") != domain:
                 continue
+            # 权限过滤
+            if user_departments is not None and user_access_level is not None:
+                doc_depts = doc.metadata.get("department", ["default"])
+                if isinstance(doc_depts, str):
+                    doc_depts = [doc_depts]
+                doc_level = doc.metadata.get("access_level", 0)
+                if not (any(d in doc_depts for d in user_departments) and doc_level <= user_access_level):
+                    continue
             if score < 0.01:  # 忽略太低分
                 break
             results.append((doc, float(score)))
@@ -166,9 +213,21 @@ class HybridRetriever:
         if config is None:
             config = SearchConfig()
 
-        # 分别检索
-        vector_results = self.vector.search(query, top_k=config.top_k, domain=config.domain_filter)
-        bm25_results = self.bm25.search(query, top_k=config.top_k, domain=config.domain_filter)
+        # 分别检索（传递权限过滤参数）
+        vector_results = self.vector.search(
+            query,
+            top_k=config.top_k,
+            domain=config.domain_filter,
+            user_departments=config.user_departments,
+            user_access_level=config.user_access_level,
+        )
+        bm25_results = self.bm25.search(
+            query,
+            top_k=config.top_k,
+            domain=config.domain_filter,
+            user_departments=config.user_departments,
+            user_access_level=config.user_access_level,
+        )
 
         # 分数融合
         doc_scores = {}

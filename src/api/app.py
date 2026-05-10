@@ -7,9 +7,9 @@ import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, HTMLResponse
+from fastapi.responses import StreamingResponse, HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -111,6 +111,14 @@ class ChatResponse(BaseModel):
     session_id: str
 
 
+class ModelSwitchRequest(BaseModel):
+    preset: str | None = None
+    base_url: str | None = None
+    api_key: str | None = None
+    model: str | None = None
+    temperature: float = 0.3
+
+
 class SessionResponse(BaseModel):
     session_id: str
 
@@ -120,6 +128,27 @@ class FeedbackRequest(BaseModel):
     query: str
     rating: int  # 1=好评, -1=差评
     comment: str | None = None
+
+
+class LoginRequest(BaseModel):
+    login: str  # 用户名或邮箱
+    password: str
+
+
+class RegisterRequest(BaseModel):
+    username: str
+    email: str
+    password: str
+    verify_code: str
+
+
+class SendCodeRequest(BaseModel):
+    email: str
+
+
+class VerifyCodeRequest(BaseModel):
+    email: str
+    code: str
 
 
 # ---- 辅助 ----
@@ -259,6 +288,104 @@ async def list_domains():
 async def submit_feedback(request: FeedbackRequest):
     log.info("反馈: session=%s rating=%d query=%s", request.session_id, request.rating, request.query[:30])
     return {"status": "ok"}
+
+
+@app.get("/api/v1/models")
+async def list_models():
+    """获取可用模型列表和当前配置"""
+    from src.models.llm_generator import LLMGenerator
+    return LLMGenerator.get_available_models()
+
+
+@app.post("/api/v1/models/switch")
+async def switch_model(request: ModelSwitchRequest):
+    """切换 LLM 模型配置"""
+    from src.models.llm_generator import PRESET_MODELS, LLMConfig
+
+    if request.preset and request.preset in PRESET_MODELS:
+        preset = PRESET_MODELS[request.preset]
+        llm_config = LLMConfig(
+            base_url=preset["base_url"],
+            api_key=preset["api_key"],
+            model=preset["model"],
+            temperature=request.temperature,
+        )
+    else:
+        llm_config = LLMConfig(
+            base_url=request.base_url or os.getenv("LLM_BASE_URL", "http://localhost:11434/v1"),
+            api_key=request.api_key or os.getenv("LLM_API_KEY", "not-needed"),
+            model=request.model or os.getenv("LLM_MODEL", "qwen2.5:3b"),
+            temperature=request.temperature,
+        )
+
+    if pipeline is None:
+        return {"error": "Pipeline 未初始化"}
+
+    result = pipeline.switch_llm(llm_config)
+    log.info("模型切换: model=%s base_url=%s", llm_config.model, llm_config.base_url)
+    return result
+
+
+@app.post("/api/v1/auth/send-code")
+async def send_code(request: SendCodeRequest):
+    """发送邮箱验证码"""
+    from src.api.auth import send_verify_code
+    ok = send_verify_code(request.email, "register")
+    if not ok:
+        return JSONResponse(status_code=400, content={"error": "邮箱格式不正确或发送失败"})
+    return {"status": "ok", "message": "验证码已发送"}
+
+
+@app.post("/api/v1/auth/verify-code")
+async def verify_email_code(request: VerifyCodeRequest):
+    """验证邮箱验证码（可选，注册时会自动验证）"""
+    from src.api.auth import verify_code
+    ok = verify_code(request.email, request.code, "register")
+    if not ok:
+        return JSONResponse(status_code=400, content={"error": "验证码错误或已过期"})
+    return {"status": "ok"}
+
+
+@app.post("/api/v1/auth/register")
+async def register(request: RegisterRequest):
+    """注册（需要邮箱验证码）"""
+    from src.api.auth import verify_code, register_user, create_token
+
+    # 验证邮箱验证码
+    if not verify_code(request.email, request.verify_code, "register"):
+        return JSONResponse(status_code=400, content={"error": "验证码错误或已过期"})
+
+    ok, error = register_user(request.username, request.email, request.password)
+    if not ok:
+        return JSONResponse(status_code=400, content={"error": error})
+
+    token = create_token(request.username, request.email)
+    return {"token": token, "username": request.username, "email": request.email}
+
+
+@app.post("/api/v1/auth/login")
+async def login(request: LoginRequest):
+    """登录（支持用户名或邮箱）"""
+    from src.api.auth import authenticate_user, create_token
+
+    ok, user_info = authenticate_user(request.login, request.password)
+    if not ok:
+        return JSONResponse(status_code=401, content={"error": "用户名/邮箱或密码错误"})
+
+    token = create_token(user_info["username"], user_info["email"])
+    return {"token": token, "username": user_info["username"], "email": user_info["email"]}
+
+
+@app.get("/api/v1/auth/me")
+async def me(request: Request):
+    from src.api.auth import get_user_by_token
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        return JSONResponse(status_code=401, content={"error": "未登录"})
+    user = get_user_by_token(auth[7:])
+    if not user:
+        return JSONResponse(status_code=401, content={"error": "Token 已过期"})
+    return {"username": user["username"], "email": user["email"]}
 
 
 @app.get("/", response_class=HTMLResponse)

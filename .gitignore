@@ -7,3 +7,4 @@ data/index/
 .claude
 .gradio
 data
+.env

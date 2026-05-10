@@ -1,30 +1,111 @@
 version: "3.8"
 
 services:
-  app:
+  # FastAPI 服务
+  api:
     build: .
     ports:
       - "8000:8000"
     environment:
-      - VAULT_PATH=/data/vault
-      - INDEX_DIR=/data/index
-      - LLM_BASE_URL=http://ollama:11434/v1
-      - LLM_API_KEY=not-needed
-      - LLM_MODEL=qwen2.5:3b
-      - API_KEY=${API_KEY:-}
+      - VECTOR_STORE_BACKEND=milvus
+      - MILVUS_HOST=milvus
+      - MILVUS_PORT=19530
+      - LLM_BASE_URL=http://vllm:8000/v1
+      - LLM_MODEL=Qwen2.5-72B-Instruct
+      - SANITIZE_QUERY=true
+      - SANITIZE_ANSWER=true
     volumes:
-      - ./data:/data
-      - ${OBSIDIAN_VAULT:-./vault}:/data/vault:ro
+      - ./data:/app/data
+      - ./docs:/app/docs:ro
     depends_on:
-      - ollama
+      - milvus
+      - vllm
+    restart: unless-stopped
 
-  ollama:
-    image: ollama/ollama:latest
+  # Milvus 向量数据库
+  milvus:
+    image: milvusdb/milvus:v2.4.0
     ports:
-      - "11434:11434"
+      - "19530:19530"
     volumes:
-      - ollama_data:/root/.ollama
-    command: ["ollama", "serve"]
+      - milvus_data:/var/lib/milvus
+    environment:
+      - ETCD_ENDPOINTS=etcd:2379
+      - MINIO_ADDRESS=minio:9000
+    depends_on:
+      - etcd
+      - minio
+    restart: unless-stopped
+
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.5
+    environment:
+      - ETCD_AUTO_COMPACTION_MODE=revision
+      - ETCD_AUTO_COMPACTION_RETENTION=1000
+      - ETCD_QUOTA_BACKEND_BYTES=4294967296
+    volumes:
+      - etcd_data:/etcd
+    command: etcd -advertise-client-urls http://127.0.0.1:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:RELEASE.2023-03-20T20-16-18Z
+    environment:
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+    volumes:
+      - minio_data:/minio_data
+    command: minio server /minio_data
+    ports:
+      - "9000:9000"
+    restart: unless-stopped
+
+  # vLLM 推理服务（Qwen2.5-72B）
+  vllm:
+    image: vllm/vllm-openai:latest
+    runtime: nvidia
+    ports:
+      - "8001:8000"
+    volumes:
+      - ~/.cache/huggingface:/root/.cache/huggingface
+    environment:
+      - HF_TOKEN=${HF_TOKEN}
+    command: >
+      --model Qwen/Qwen2.5-72B-Instruct
+      --tensor-parallel-size 4
+      --max-model-len 32768
+      --dtype bfloat16
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 4
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  # Prometheus 监控
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    restart: unless-stopped
+
+  # Grafana 可视化
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+    restart: unless-stopped
 
 volumes:
-  ollama_data:
+  milvus_data:
+  etcd_data:
+  minio_data:
+  prometheus_data:
+  grafana_data:

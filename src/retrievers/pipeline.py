@@ -241,6 +241,27 @@ class SecondBrainPipeline:
                 model=self.config.llm_model,
             )
 
+    def switch_llm(self, llm_config: LLMConfig) -> dict:
+        """运行时切换 LLM 配置"""
+        self.config.llm_base_url = llm_config.base_url
+        self.config.llm_api_key = llm_config.api_key
+        self.config.llm_model = llm_config.model
+        self.config.llm_temperature = llm_config.temperature
+
+        if self.llm_generator:
+            self.llm_generator.update_config(llm_config)
+        else:
+            self.llm_generator = LLMGenerator(llm_config)
+
+        # 重置 QueryRewriter
+        self.query_rewriter = None
+
+        return {
+            "status": "ok",
+            "model": llm_config.model,
+            "base_url": llm_config.base_url,
+        }
+
     def _rewrite_query(self, query: str) -> tuple[str, str]:
         """查询改写，返回 (改写后查询, 原始查询)"""
         if self.query_rewriter:

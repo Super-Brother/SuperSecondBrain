@@ -12,6 +12,29 @@ from dataclasses import dataclass
 from openai import OpenAI
 
 
+# 预设模型配置
+PRESET_MODELS = {
+    "ollama-local": {
+        "name": "Ollama 本地 (Qwen2.5-3B)",
+        "base_url": "http://localhost:11434/v1",
+        "api_key": "not-needed",
+        "model": "qwen2.5:3b",
+    },
+    "deepseek": {
+        "name": "DeepSeek-V3",
+        "base_url": "https://api.deepseek.com/v1",
+        "api_key": "",
+        "model": "deepseek-chat",
+    },
+    "deepseek-reasoner": {
+        "name": "DeepSeek-R1",
+        "base_url": "https://api.deepseek.com/v1",
+        "api_key": "",
+        "model": "deepseek-reasoner",
+    },
+}
+
+
 @dataclass
 class LLMConfig:
     """LLM 配置"""
@@ -40,6 +63,30 @@ class LLMGenerator:
         self.total_prompt_tokens = 0
         self.total_completion_tokens = 0
         self.call_count = 0
+
+    def update_config(self, config: LLMConfig) -> None:
+        """运行时切换模型配置"""
+        self.config = config
+        self.client = OpenAI(
+            base_url=self.config.base_url,
+            api_key=self.config.api_key,
+        )
+
+    @staticmethod
+    def get_available_models() -> dict:
+        """获取可用模型列表"""
+        return {
+            "presets": {
+                key: {"name": val["name"], "model": val["model"], "base_url": val["base_url"]}
+                for key, val in PRESET_MODELS.items()
+            },
+            "current": {
+                "base_url": os.getenv("LLM_BASE_URL", "http://localhost:11434/v1"),
+                "api_key": "***" if os.getenv("LLM_API_KEY") else "",
+                "model": os.getenv("LLM_MODEL", "qwen2.5:3b"),
+                "temperature": float(os.getenv("LLM_TEMPERATURE", "0.3")),
+            },
+        }
 
     def _track_usage(self, response):
         if hasattr(response, "usage") and response.usage:
