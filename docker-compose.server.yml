@@ -1,5 +1,5 @@
-# 默认部署配置（FAISS 版本）
-# 用法: docker compose up -d
+# 服务器部署配置（FAISS 版本 - 轻量级）
+# 用法: docker compose -f docker-compose.server.yml up -d
 
 services:
   api:
@@ -7,7 +7,7 @@ services:
     ports:
       - "8000:8000"
     env_file:
-      - .env
+      - .env.server
     environment:
       - VECTOR_STORE_BACKEND=faiss
       - REDIS_URL=redis://redis:6379/0

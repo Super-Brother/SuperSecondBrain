@@ -8,3 +8,5 @@ data/index/
 .gradio
 data
 .env
+.env.server
+.env.docker
