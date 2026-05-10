@@ -75,13 +75,17 @@ class ConversationManager:
         self.conn.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
         self.conn.commit()
 
-    def list_sessions(self, limit: int = 50) -> list[dict]:
-        rows = self.conn.execute(
+    def list_sessions(self, limit: int = 50, include_empty: bool = False) -> list[dict]:
+        """列出会话，默认过滤掉 0 消息的空会话（避免侧边栏被幽灵会话淹没）。"""
+        sql = (
             "SELECT s.session_id, s.created_at, s.updated_at, "
             "(SELECT COUNT(*) FROM messages m WHERE m.session_id = s.session_id) as msg_count "
-            "FROM sessions s ORDER BY s.updated_at DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
+            "FROM sessions s "
+        )
+        if not include_empty:
+            sql += "WHERE EXISTS (SELECT 1 FROM messages m WHERE m.session_id = s.session_id) "
+        sql += "ORDER BY s.updated_at DESC LIMIT ?"
+        rows = self.conn.execute(sql, (limit,)).fetchall()
         return [dict(r) for r in rows]
 
     def get_message_count(self, session_id: str) -> int:

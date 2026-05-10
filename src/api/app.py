@@ -11,6 +11,12 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from dotenv import load_dotenv
+
+# 在国内服务器部署时，强制使用 HuggingFace 镜像，避免模型下载被墙
+import os
+if not os.getenv("HF_ENDPOINT"):
+    os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
+
 from fastapi import FastAPI, File, Request, UploadFile
 from fastapi import status as http_status
 
@@ -35,6 +41,11 @@ from src.utils.redis_cache import RedisCache
 from src.api.auth import APIKeyMiddleware
 from src.api.static import HTML_TEMPLATE
 from src.utils.vault_watcher import VaultWatcher
+from src.utils.model_config_store import (
+    StoredModelConfig,
+    load_config as load_model_config,
+    save_config as save_model_config,
+)
 
 # ---- 配置 ----
 
@@ -63,12 +74,24 @@ vault_watcher: VaultWatcher = None
 async def lifespan(app: FastAPI):
     global pipeline, conv_manager, response_cache, vault_watcher
 
+    # 优先使用持久化的模型配置；不存在则回退到环境变量
+    stored = load_model_config()
+    if stored:
+        llm_base_url = stored.base_url
+        llm_api_key = stored.api_key or "not-needed"
+        llm_model = stored.model
+        log.info("加载持久化模型配置: model=%s base_url=%s", llm_model, llm_base_url)
+    else:
+        llm_base_url = os.getenv("LLM_BASE_URL", "http://localhost:11434/v1")
+        llm_api_key = os.getenv("LLM_API_KEY", "not-needed")
+        llm_model = os.getenv("LLM_MODEL", "qwen2.5:3b")
+
     config = PipelineConfig(
         vault_path=VAULT_PATH,
         index_dir=INDEX_DIR,
-        llm_base_url=os.getenv("LLM_BASE_URL", "http://localhost:11434/v1"),
-        llm_api_key=os.getenv("LLM_API_KEY", "not-needed"),
-        llm_model=os.getenv("LLM_MODEL", "qwen2.5:3b"),
+        llm_base_url=llm_base_url,
+        llm_api_key=llm_api_key,
+        llm_model=llm_model,
     )
     pipeline = SecondBrainPipeline(config)
     conv_manager = ConversationManager()
@@ -83,6 +106,10 @@ async def lifespan(app: FastAPI):
     if (index_path / "faiss.index").exists():
         log.info("加载已有索引: %s", INDEX_DIR)
         pipeline.load_index(INDEX_DIR)
+        # 预热模型（避免首次请求时加载导致的长时间等待）
+        log.info("正在预热模型（Reranker / Embedding / LLM）...")
+        pipeline.warmup()
+        log.info("预热完成，服务就绪")
     else:
         log.warning("未找到索引，请运行: python scripts/build_index.py")
 
@@ -279,6 +306,21 @@ async def delete_session(session_id: str):
     return {"status": "ok"}
 
 
+@app.get("/api/v1/sessions/{session_id}/messages")
+async def get_session_messages(session_id: str):
+    """获取指定会话的历史消息"""
+    if conv_manager is None:
+        return JSONResponse(status_code=503, content={"error": "服务未就绪"})
+    messages = conv_manager.get_history(session_id, limit=100)
+    return {
+        "session_id": session_id,
+        "messages": [
+            {"role": m.role, "content": m.content, "timestamp": m.timestamp}
+            for m in messages
+        ],
+    }
+
+
 @app.post("/api/v1/chat", response_model=ChatResponse)
 @limiter.limit("10/minute")
 async def chat(request: Request, body: ChatRequest):
@@ -363,14 +405,48 @@ async def submit_feedback(request: FeedbackRequest):
 
 @app.get("/api/v1/models")
 async def list_models():
-    """获取可用模型列表和当前配置"""
-    from src.models.llm_generator import LLMGenerator
-    return LLMGenerator.get_available_models()
+    """获取可用模型列表和当前配置（基于 pipeline 实际生效配置 + 持久化文件）"""
+    from src.models.llm_generator import PRESET_MODELS
+
+    # 优先用 pipeline 当前生效配置；持久化文件提供 preset 标识
+    stored = load_model_config()
+    if pipeline and pipeline.config:
+        current_base_url = pipeline.config.llm_base_url
+        current_model = pipeline.config.llm_model
+        current_temperature = pipeline.config.llm_temperature
+    else:
+        current_base_url = os.getenv("LLM_BASE_URL", "http://localhost:11434/v1")
+        current_model = os.getenv("LLM_MODEL", "qwen2.5:3b")
+        current_temperature = float(os.getenv("LLM_TEMPERATURE", "0.3"))
+
+    # 反向查找 preset key（如果当前配置匹配某个预设）
+    preset_key = stored.preset if stored else None
+    if not preset_key:
+        for key, val in PRESET_MODELS.items():
+            if val["base_url"] == current_base_url and val["model"] == current_model:
+                preset_key = key
+                break
+        else:
+            preset_key = "custom"
+
+    return {
+        "presets": {
+            key: {"name": val["name"], "model": val["model"], "base_url": val["base_url"]}
+            for key, val in PRESET_MODELS.items()
+        },
+        "current": {
+            "preset": preset_key,
+            "base_url": current_base_url,
+            "api_key": "***" if (stored and stored.api_key) else "",
+            "model": current_model,
+            "temperature": current_temperature,
+        },
+    }
 
 
 @app.post("/api/v1/models/switch")
 async def switch_model(request: ModelSwitchRequest):
-    """切换 LLM 模型配置"""
+    """切换 LLM 模型配置（运行时生效 + 落盘持久化）"""
     from src.models.llm_generator import PRESET_MODELS, LLMConfig
 
     if request.preset and request.preset in PRESET_MODELS:
@@ -381,6 +457,7 @@ async def switch_model(request: ModelSwitchRequest):
             model=preset["model"],
             temperature=request.temperature,
         )
+        preset_key = request.preset
     else:
         llm_config = LLMConfig(
             base_url=request.base_url or os.getenv("LLM_BASE_URL", "http://localhost:11434/v1"),
@@ -388,12 +465,23 @@ async def switch_model(request: ModelSwitchRequest):
             model=request.model or os.getenv("LLM_MODEL", "qwen2.5:3b"),
             temperature=request.temperature,
         )
+        preset_key = "custom"
 
     if pipeline is None:
         return {"error": "Pipeline 未初始化"}
 
     result = pipeline.switch_llm(llm_config)
-    log.info("模型切换: model=%s base_url=%s", llm_config.model, llm_config.base_url)
+
+    # 持久化：刷新页面或重启服务后仍生效
+    save_model_config(StoredModelConfig(
+        base_url=llm_config.base_url,
+        api_key=llm_config.api_key or "",
+        model=llm_config.model,
+        temperature=llm_config.temperature,
+        preset=preset_key,
+    ))
+
+    log.info("模型切换并持久化: preset=%s model=%s base_url=%s", preset_key, llm_config.model, llm_config.base_url)
     return result
 
 

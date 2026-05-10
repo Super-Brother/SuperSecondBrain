@@ -516,7 +516,85 @@ async function loadSession(sessionId) {{
     currentSessionId = sessionId;
     document.getElementById('currentSessionTitle').textContent = '对话 ' + sessionId.slice(0,8);
     renderSessions();
-    // TODO: 加载历史消息
+
+    // 加载历史消息
+    const messagesDiv = document.getElementById('messages');
+    messagesDiv.innerHTML = '';
+
+    try {{
+        const headers = token ? {{ 'Authorization': 'Bearer ' + token }} : {{}};
+        const resp = await fetch('/api/v1/sessions/' + sessionId + '/messages', {{ headers }});
+        const data = await resp.json();
+        const messages = data.messages || [];
+
+        if (messages.length === 0) {{
+            // 显示欢迎消息
+            messagesDiv.innerHTML = `
+                <div class="max-w-2xl mx-auto flex flex-col gap-3">
+                    <div class="flex items-center gap-2">
+                        <div class="w-7 h-7 rounded-full bg-primary-container flex items-center justify-center">
+                            <span class="material-symbols-outlined text-xs text-white">psychology</span>
+                        </div>
+                        <span class="text-xs font-medium text-on-surface/50">AI Assistant</span>
+                    </div>
+                    <div class="bg-surface-container-low p-4 rounded-xl text-on-surface text-sm leading-relaxed border-l-2 border-primary/30">
+                        你好！我是 SecondBrain Chat，基于你的知识库回答问题。试试问我点什么吧！
+                    </div>
+                </div>
+            `;
+        }} else {{
+            // 渲染历史消息（无动画、无光标）
+            for (const msg of messages) {{
+                if (msg.role === 'user') {{
+                    const wrapper = document.createElement('div');
+                    wrapper.className = 'max-w-2xl mx-auto flex flex-col gap-2';
+                    wrapper.innerHTML = `
+                        <div class="flex justify-end items-start gap-2">
+                            <div class="bg-gradient-to-br from-primary-container to-blue-600 text-white px-4 py-2.5 rounded-2xl text-sm max-w-[85%] md:max-w-[70%] leading-relaxed">
+                                ${{escapeHtml(msg.content)}}
+                            </div>
+                            <div class="w-7 h-7 rounded-full bg-primary-container flex items-center justify-center shrink-0 mt-0.5">
+                                <span class="material-symbols-outlined text-white" style="font-size: 14px;">person</span>
+                            </div>
+                        </div>
+                    `;
+                    messagesDiv.appendChild(wrapper);
+                }} else if (msg.role === 'assistant') {{
+                    const wrapper = document.createElement('div');
+                    wrapper.className = 'max-w-2xl mx-auto flex flex-col gap-2';
+                    wrapper.innerHTML = `
+                        <div class="flex items-center gap-2">
+                            <div class="w-7 h-7 rounded-full bg-primary-container flex items-center justify-center">
+                                <span class="material-symbols-outlined text-xs text-white">psychology</span>
+                            </div>
+                            <span class="text-xs font-medium text-on-surface/50">AI Assistant</span>
+                        </div>
+                        <div class="bg-surface-container-low px-4 py-3 rounded-xl text-on-surface leading-relaxed border-l-2 border-primary/30 whitespace-pre-wrap text-sm">
+                            ${{escapeHtml(msg.content)}}
+                        </div>
+                    `;
+                    messagesDiv.appendChild(wrapper);
+                }}
+            }}
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }}
+    }} catch(e) {{
+        // 加载失败时显示欢迎消息
+        messagesDiv.innerHTML = `
+            <div class="max-w-2xl mx-auto flex flex-col gap-3">
+                <div class="flex items-center gap-2">
+                    <div class="w-7 h-7 rounded-full bg-primary-container flex items-center justify-center">
+                        <span class="material-symbols-outlined text-xs text-white">psychology</span>
+                    </div>
+                    <span class="text-xs font-medium text-on-surface/50">AI Assistant</span>
+                </div>
+                <div class="bg-surface-container-low p-4 rounded-xl text-on-surface text-sm leading-relaxed border-l-2 border-primary/30">
+                    你好！我是 SecondBrain Chat，基于你的知识库回答问题。试试问我点什么吧！
+                </div>
+            </div>
+        `;
+    }}
+
     if (window.innerWidth < 768) toggleHistoryDrawer();
 }}
 
@@ -548,6 +626,32 @@ function openSettings() {{
     document.getElementById('settingsModal').classList.add('flex');
     switchSettingsTab('model');
     loadSettingsStats();
+    loadCurrentModelConfig();
+}}
+
+async function loadCurrentModelConfig() {{
+    // 从后端拉取当前生效的模型配置并回填 UI（修复刷新后配置丢失问题）
+    try {{
+        const headers = token ? {{ 'Authorization': 'Bearer ' + token }} : {{}};
+        const resp = await fetch('/api/v1/models', {{ headers }});
+        if (!resp.ok) return;
+        const data = await resp.json();
+        const cur = data.current || {{}};
+        const select = document.getElementById('settingsModel');
+        if (select && cur.preset) {{
+            select.value = cur.preset;
+            onSettingsModelChange();
+        }}
+        if (cur.preset === 'custom') {{
+            const baseUrlEl = document.getElementById('settingsBaseUrl');
+            const apiKeyEl = document.getElementById('settingsApiKey');
+            const modelIdEl = document.getElementById('settingsModelId');
+            if (baseUrlEl) baseUrlEl.value = cur.base_url || '';
+            if (modelIdEl) modelIdEl.value = cur.model || '';
+            // api_key 后端返回 *** 占位，留空让用户重新输入
+            if (apiKeyEl) apiKeyEl.placeholder = cur.api_key === '***' ? '已配置（如需修改请重新输入）' : 'sk-...';
+        }}
+    }} catch(e) {{}}
 }}
 
 function closeSettings() {{
