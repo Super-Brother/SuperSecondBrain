@@ -16,13 +16,18 @@ import secrets
 import time
 import re
 import smtplib
+import sqlite3
 import ssl
+from datetime import datetime
 from email.mime.text import MIMEText
-from dataclasses import dataclass
+from pathlib import Path
 
+from dotenv import load_dotenv
 from fastapi import Request
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
+
+load_dotenv()
 
 
 PUBLIC_PATHS = {
@@ -31,11 +36,104 @@ PUBLIC_PATHS = {
     "/api/v1/auth/send-code", "/api/v1/auth/verify-code",
 }
 
-# ---- 内存存储（生产环境应使用 Redis + 数据库） ----
-_USERS = {}          # username -> {password_hash, salt, email}
-_EMAIL_MAP = {}      # email -> username
+# ---- 内存存储（验证码临时性，不持久化） ----
 _VERIFY_CODES = {}   # email -> {code, exp, purpose}
-_TOKENS = {}         # token -> {username, email, exp}
+
+
+class UserStore:
+    """SQLite 用户持久化存储"""
+
+    def __init__(self, db_path: str = "data/auth.db"):
+        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+        self.conn = sqlite3.connect(db_path, check_same_thread=False)
+        self.conn.row_factory = sqlite3.Row
+        self._init_db()
+
+    def _init_db(self):
+        self.conn.executescript("""
+            CREATE TABLE IF NOT EXISTS users (
+                username TEXT PRIMARY KEY,
+                password_hash TEXT NOT NULL,
+                salt TEXT NOT NULL,
+                email TEXT UNIQUE NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+
+            CREATE TABLE IF NOT EXISTS tokens (
+                token TEXT PRIMARY KEY,
+                username TEXT NOT NULL,
+                email TEXT NOT NULL,
+                exp REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_tokens_exp ON tokens(exp);
+        """)
+
+    # ---- users ----
+
+    def add_user(self, username: str, password_hash: str, salt: str, email: str):
+        self.conn.execute(
+            "INSERT INTO users (username, password_hash, salt, email, created_at) VALUES (?, ?, ?, ?, ?)",
+            (username, password_hash, salt, email, datetime.now().isoformat()),
+        )
+        self.conn.commit()
+
+    def get_user_by_username(self, username: str) -> dict | None:
+        row = self.conn.execute(
+            "SELECT username, password_hash, salt, email FROM users WHERE username = ?",
+            (username,),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def get_user_by_email(self, email: str) -> dict | None:
+        row = self.conn.execute(
+            "SELECT username, password_hash, salt, email FROM users WHERE email = ?",
+            (email,),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def user_exists(self, username: str) -> bool:
+        row = self.conn.execute(
+            "SELECT 1 FROM users WHERE username = ?", (username,)
+        ).fetchone()
+        return row is not None
+
+    def email_exists(self, email: str) -> bool:
+        row = self.conn.execute(
+            "SELECT 1 FROM users WHERE email = ?", (email,)
+        ).fetchone()
+        return row is not None
+
+    def has_any_user(self) -> bool:
+        row = self.conn.execute("SELECT 1 FROM users LIMIT 1").fetchone()
+        return row is not None
+
+    # ---- tokens ----
+
+    def add_token(self, token: str, username: str, email: str, exp: float):
+        self.conn.execute(
+            "INSERT INTO tokens (token, username, email, exp) VALUES (?, ?, ?, ?)",
+            (token, username, email, exp),
+        )
+        self.conn.commit()
+
+    def get_token(self, token: str) -> dict | None:
+        row = self.conn.execute(
+            "SELECT username, email, exp FROM tokens WHERE token = ?",
+            (token,),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def delete_token(self, token: str):
+        self.conn.execute("DELETE FROM tokens WHERE token = ?", (token,))
+        self.conn.commit()
+
+    def cleanup_expired_tokens(self):
+        self.conn.execute("DELETE FROM tokens WHERE exp < ?", (time.time(),))
+        self.conn.commit()
+
+
+_user_store = UserStore()
 
 
 def _hash_password(password: str, salt: str = None) -> tuple[str, str]:
@@ -121,12 +219,13 @@ def verify_code(email: str, code: str, purpose: str = "register") -> bool:
 
 def create_token(username: str, email: str, expiry: int = 86400 * 7) -> str:
     token = secrets.token_urlsafe(32)
-    _TOKENS[token] = {"username": username, "email": email, "exp": time.time() + expiry}
+    _user_store.add_token(token, username, email, time.time() + expiry)
+    _user_store.cleanup_expired_tokens()
     return token
 
 
 def verify_token(token: str) -> dict | None:
-    data = _TOKENS.get(token)
+    data = _user_store.get_token(token)
     if not data or data["exp"] < time.time():
         return None
     return data
@@ -142,45 +241,37 @@ def register_user(username: str, email: str, password: str) -> tuple[bool, str]:
         return False, "邮箱格式不正确"
     if not password or len(password) < 6:
         return False, "密码至少6个字符"
-    if username in _USERS:
+    if _user_store.user_exists(username):
         return False, "用户名已存在"
-    if email in _EMAIL_MAP:
+    if _user_store.email_exists(email):
         return False, "邮箱已被注册"
 
     hashed, salt = _hash_password(password)
-    _USERS[username] = {
-        "password_hash": hashed,
-        "salt": salt,
-        "email": email,
-    }
-    _EMAIL_MAP[email] = username
+    _user_store.add_user(username, hashed, salt, email)
     return True, ""
 
 
 def authenticate_user(login: str, password: str) -> tuple[bool, dict]:
     """验证用户（支持用户名或邮箱登录），返回 (是否成功, 用户信息)"""
     # 先按用户名查找
-    user = _USERS.get(login)
+    user = _user_store.get_user_by_username(login)
     if not user and _is_valid_email(login):
         # 按邮箱查找
-        username = _EMAIL_MAP.get(login)
-        if username:
-            user = _USERS.get(username)
-            login = username
+        user = _user_store.get_user_by_email(login)
 
     if not user:
         return False, {}
     if not _verify_password(password, user["password_hash"], user["salt"]):
         return False, {}
 
-    return True, {"username": login, "email": user["email"]}
+    return True, {"username": user["username"], "email": user["email"]}
 
 
 def get_user_by_token(token: str) -> dict | None:
     data = verify_token(token)
     if not data:
         return None
-    user = _USERS.get(data["username"])
+    user = _user_store.get_user_by_username(data["username"])
     if not user:
         return None
     return {"username": data["username"], "email": user["email"]}
@@ -196,7 +287,7 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
 
-        if not self.api_key and not _USERS:
+        if not self.api_key and not _user_store.has_any_user():
             return await call_next(request)
         if path in PUBLIC_PATHS:
             return await call_next(request)

@@ -180,60 +180,83 @@ body {{ font-family: 'Inter', sans-serif; -webkit-tap-highlight-color: transpare
     </main>
 </div>
 
-<!-- ============ 设置页（右侧抽屉） ============ -->
-<div id="settingsOverlay" onclick="closeSettings()" class="fixed inset-0 bg-black/50 z-40 hidden"></div>
-<div id="settingsDrawer" class="drawer fixed right-0 top-0 z-50 w-full max-w-sm h-full bg-surface-container border-l border-white/5 flex flex-col translate-x-full">
-    <div class="p-4 border-b border-white/5 flex items-center justify-between shrink-0">
+<!-- ============ 设置弹窗 ============ -->
+<div id="settingsOverlay" onclick="closeSettings()" class="fixed inset-0 bg-black/60 z-40 hidden backdrop-blur-sm"></div>
+<div id="settingsModal" class="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-50 w-full max-w-lg bg-surface-container rounded-2xl border border-white/10 shadow-2xl hidden flex-col max-h-[85vh]">
+    <!-- 头部 -->
+    <div class="p-5 border-b border-white/5 flex items-center justify-between shrink-0">
         <h2 class="font-bold text-lg">设置</h2>
-        <button onclick="closeSettings()" class="material-symbols-outlined text-on-surface/50">close</button>
+        <button onclick="closeSettings()" class="material-symbols-outlined text-on-surface/50 hover:text-on-surface transition-colors">close</button>
     </div>
-    <div class="flex-1 overflow-y-auto p-4 space-y-6 scrollbar-hide">
 
-        <!-- LLM 模型设置 -->
-        <div>
-            <label class="text-[10px] font-black uppercase tracking-widest text-on-surface/50 mb-2 block">LLM 模型</label>
-            <select id="settingsModel" onchange="onSettingsModelChange()" class="w-full bg-surface-container-high border-none text-on-surface rounded-lg py-3 px-4 text-sm mb-2">
-                <option value="ollama-local">Ollama 本地 (Qwen2.5-3B)</option>
-                <option value="deepseek">DeepSeek-V3</option>
-                <option value="deepseek-reasoner">DeepSeek-R1</option>
-                <option value="custom">自定义...</option>
-            </select>
-            <div id="settingsCustomModel" class="hidden space-y-2">
-                <input id="settingsBaseUrl" type="text" placeholder="Base URL" class="w-full bg-surface-container-high border-none rounded-lg py-2.5 px-3 text-xs"/>
-                <input id="settingsApiKey" type="password" placeholder="API Key" class="w-full bg-surface-container-high border-none rounded-lg py-2.5 px-3 text-xs"/>
-                <input id="settingsModelId" type="text" placeholder="Model ID" class="w-full bg-surface-container-high border-none rounded-lg py-2.5 px-3 text-xs"/>
+    <!-- Tab 导航 -->
+    <div class="flex border-b border-white/5 shrink-0">
+        <button id="tabModelBtn" onclick="switchSettingsTab('model')" class="flex-1 py-3 text-sm font-medium text-primary border-b-2 border-primary transition-colors">模型配置</button>
+        <button id="tabGeneralBtn" onclick="switchSettingsTab('general')" class="flex-1 py-3 text-sm font-medium text-on-surface/50 hover:text-on-surface transition-colors">通用设置</button>
+    </div>
+
+    <div class="flex-1 overflow-y-auto p-5 scrollbar-hide">
+        <!-- 模型配置 Tab -->
+        <div id="tabModel" class="space-y-5">
+            <div>
+                <label class="text-[10px] font-black uppercase tracking-widest text-on-surface/50 mb-2 block">预设模型</label>
+                <select id="settingsModel" onchange="onSettingsModelChange()" class="w-full bg-surface-container-high border-none text-on-surface rounded-lg py-3 px-4 text-sm">
+                    <option value="ollama-local">Ollama 本地 (Qwen2.5-3B)</option>
+                    <option value="deepseek">DeepSeek-V3</option>
+                    <option value="deepseek-reasoner">DeepSeek-R1</option>
+                    <option value="custom">自定义...</option>
+                </select>
             </div>
-            <button onclick="saveSettingsModel()" class="w-full mt-2 bg-primary-container text-white text-xs font-bold py-2.5 rounded-lg">保存模型配置</button>
-            <div id="settingsModelStatus" class="text-[10px] mt-1"></div>
-        </div>
 
-        <!-- 知识领域 -->
-        <div>
-            <label class="text-[10px] font-black uppercase tracking-widest text-on-surface/50 mb-2 block">知识领域</label>
-            <select id="settingsDomain" class="w-full bg-surface-container-high border-none text-on-surface rounded-lg py-3 px-4 text-sm">
-                <option value="">全部领域</option>
-                <option value="通识">通识</option>
-                <option value="AI/ML">AI/ML</option>
-                <option value="编程">编程</option>
-                <option value="面试">面试</option>
-            </select>
-        </div>
-
-        <!-- 返回结果数 -->
-        <div>
-            <div class="flex justify-between items-center mb-2">
-                <label class="text-[10px] font-black uppercase tracking-widest text-on-surface/50">返回结果数</label>
-                <span id="settingsTopkVal" class="text-xs font-mono text-primary bg-primary/10 px-2 py-0.5 rounded">5</span>
+            <div id="settingsCustomModel" class="hidden space-y-3">
+                <div>
+                    <label class="text-[10px] font-black uppercase tracking-widest text-on-surface/50 mb-1.5 block">Base URL</label>
+                    <input id="settingsBaseUrl" type="text" placeholder="例如: https://api.openai.com/v1" class="w-full bg-surface-container-high border-none rounded-lg py-2.5 px-3 text-sm text-on-surface placeholder-on-surface/30"/>
+                </div>
+                <div>
+                    <label class="text-[10px] font-black uppercase tracking-widest text-on-surface/50 mb-1.5 block">API Key</label>
+                    <input id="settingsApiKey" type="password" placeholder="sk-..." class="w-full bg-surface-container-high border-none rounded-lg py-2.5 px-3 text-sm text-on-surface placeholder-on-surface/30"/>
+                </div>
+                <div>
+                    <label class="text-[10px] font-black uppercase tracking-widest text-on-surface/50 mb-1.5 block">模型 ID</label>
+                    <input id="settingsModelId" type="text" placeholder="例如: gpt-4o" class="w-full bg-surface-container-high border-none rounded-lg py-2.5 px-3 text-sm text-on-surface placeholder-on-surface/30"/>
+                </div>
             </div>
-            <input type="range" id="settingsTopk" min="1" max="10" value="5" class="w-full accent-primary" oninput="document.getElementById('settingsTopkVal').textContent=this.value">
+
+            <button onclick="saveSettingsModel()" class="w-full bg-primary-container text-white text-sm font-bold py-3 rounded-lg hover:opacity-90 transition-opacity">保存模型配置</button>
+            <div id="settingsModelStatus" class="text-[11px] text-center"></div>
         </div>
 
-        <!-- 统计 -->
-        <div class="bg-surface-container-low rounded-xl p-4">
-            <div class="text-xs font-bold text-on-surface/50 mb-3">知识库统计</div>
-            <div id="settingsStats" class="text-xs text-on-surface/70 space-y-1.5">
-                <div class="flex justify-between"><span>总笔记</span><span class="text-primary font-bold" id="statNotes">-</span></div>
-                <div class="flex justify-between"><span>总片段</span><span class="text-primary font-bold" id="statChunks">-</span></div>
+        <!-- 通用设置 Tab -->
+        <div id="tabGeneral" class="hidden space-y-5">
+            <!-- 知识领域 -->
+            <div>
+                <label class="text-[10px] font-black uppercase tracking-widest text-on-surface/50 mb-2 block">知识领域</label>
+                <select id="settingsDomain" class="w-full bg-surface-container-high border-none text-on-surface rounded-lg py-3 px-4 text-sm">
+                    <option value="">全部领域</option>
+                    <option value="通识">通识</option>
+                    <option value="AI/ML">AI/ML</option>
+                    <option value="编程">编程</option>
+                    <option value="面试">面试</option>
+                </select>
+            </div>
+
+            <!-- 返回结果数 -->
+            <div>
+                <div class="flex justify-between items-center mb-2">
+                    <label class="text-[10px] font-black uppercase tracking-widest text-on-surface/50">返回结果数</label>
+                    <span id="settingsTopkVal" class="text-xs font-mono text-primary bg-primary/10 px-2 py-0.5 rounded">5</span>
+                </div>
+                <input type="range" id="settingsTopk" min="1" max="10" value="5" class="w-full accent-primary" oninput="document.getElementById('settingsTopkVal').textContent=this.value">
+            </div>
+
+            <!-- 统计 -->
+            <div class="bg-surface-container-low rounded-xl p-4">
+                <div class="text-xs font-bold text-on-surface/50 mb-3">知识库统计</div>
+                <div id="settingsStats" class="text-xs text-on-surface/70 space-y-1.5">
+                    <div class="flex justify-between"><span>总笔记</span><span class="text-primary font-bold" id="statNotes">-</span></div>
+                    <div class="flex justify-between"><span>总片段</span><span class="text-primary font-bold" id="statChunks">-</span></div>
+                </div>
             </div>
         </div>
     </div>
@@ -521,13 +544,39 @@ function toggleHistoryDrawer() {{
 
 function openSettings() {{
     document.getElementById('settingsOverlay').classList.remove('hidden');
-    document.getElementById('settingsDrawer').classList.remove('translate-x-full');
+    document.getElementById('settingsModal').classList.remove('hidden');
+    document.getElementById('settingsModal').classList.add('flex');
+    switchSettingsTab('model');
     loadSettingsStats();
 }}
 
 function closeSettings() {{
     document.getElementById('settingsOverlay').classList.add('hidden');
-    document.getElementById('settingsDrawer').classList.add('translate-x-full');
+    document.getElementById('settingsModal').classList.add('hidden');
+    document.getElementById('settingsModal').classList.remove('flex');
+}}
+
+function switchSettingsTab(tab) {{
+    const tabModel = document.getElementById('tabModel');
+    const tabGeneral = document.getElementById('tabGeneral');
+    const tabModelBtn = document.getElementById('tabModelBtn');
+    const tabGeneralBtn = document.getElementById('tabGeneralBtn');
+
+    if (tab === 'model') {{
+        tabModel.classList.remove('hidden');
+        tabGeneral.classList.add('hidden');
+        tabModelBtn.classList.add('text-primary', 'border-b-2', 'border-primary');
+        tabModelBtn.classList.remove('text-on-surface/50');
+        tabGeneralBtn.classList.remove('text-primary', 'border-b-2', 'border-primary');
+        tabGeneralBtn.classList.add('text-on-surface/50');
+    }} else {{
+        tabModel.classList.add('hidden');
+        tabGeneral.classList.remove('hidden');
+        tabGeneralBtn.classList.add('text-primary', 'border-b-2', 'border-primary');
+        tabGeneralBtn.classList.remove('text-on-surface/50');
+        tabModelBtn.classList.remove('text-primary', 'border-b-2', 'border-primary');
+        tabModelBtn.classList.add('text-on-surface/50');
+    }}
 }}
 
 // ---- 设置 ----

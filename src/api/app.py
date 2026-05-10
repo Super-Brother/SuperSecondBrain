@@ -7,10 +7,19 @@ import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+from dotenv import load_dotenv
 from fastapi import FastAPI, Request
+
+load_dotenv()
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, HTMLResponse, JSONResponse
 from pydantic import BaseModel
+
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+
+limiter = Limiter(key_func=get_remote_address)
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -18,6 +27,7 @@ from src.retrievers.pipeline import SecondBrainPipeline, PipelineConfig
 from src.models.conversation import ConversationManager
 from src.utils.logger import log
 from src.utils.cache import ResponseCache
+from src.utils.redis_cache import RedisCache
 from src.api.auth import APIKeyMiddleware
 from src.api.static import HTML_TEMPLATE
 
@@ -49,7 +59,12 @@ async def lifespan(app: FastAPI):
     )
     pipeline = SecondBrainPipeline(config)
     conv_manager = ConversationManager()
-    response_cache = ResponseCache(max_size=256, ttl_seconds=int(os.getenv("CACHE_TTL", "3600")))
+    redis_url = os.getenv("REDIS_URL")
+    if redis_url:
+        response_cache = RedisCache(redis_url=redis_url, ttl_seconds=int(os.getenv("CACHE_TTL", "3600")))
+        log.info("Redis 缓存已启用: %s", redis_url)
+    else:
+        response_cache = ResponseCache(max_size=256, ttl_seconds=int(os.getenv("CACHE_TTL", "3600")))
 
     index_path = Path(INDEX_DIR)
     if (index_path / "faiss.index").exists():
@@ -69,6 +84,8 @@ app = FastAPI(
     version="0.2.0",
     lifespan=lifespan,
 )
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,
@@ -159,7 +176,17 @@ def _get_history(session_id: str | None) -> list[dict] | None:
     messages = conv_manager.get_history(session_id)
     if not messages:
         return None
-    return [{"role": m.role, "content": m.content} for m in messages]
+    history = [{"role": m.role, "content": m.content} for m in messages]
+    # 多轮对话压缩：超过 20 条时，对前面的消息生成摘要
+    if len(history) > 20 and pipeline and pipeline.llm_generator:
+        early = history[:-10]  # 保留最近 10 条完整
+        try:
+            summary = pipeline.llm_generator.summarize_conversation(early)
+            if summary:
+                return [{"role": "system", "content": f"历史对话摘要：{summary}"}] + history[-10:]
+        except Exception:
+            pass
+    return history
 
 
 def _save_turn(session_id: str, query: str, answer: str):
@@ -211,57 +238,59 @@ async def delete_session(session_id: str):
 
 
 @app.post("/api/v1/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest):
+@limiter.limit("10/minute")
+async def chat(request: Request, body: ChatRequest):
     if pipeline is None or pipeline.rag_retriever is None:
         return ChatResponse(
-            query=request.query,
+            query=body.query,
             answer="知识库索引未加载，请先构建索引。",
             sources=[],
-            session_id=request.session_id or "",
+            session_id=body.session_id or "",
         )
 
-    session_id = request.session_id or conv_manager.create_session()
+    session_id = body.session_id or conv_manager.create_session()
 
     # 查缓存
-    cached = response_cache.get(request.query, request.domain) if response_cache else None
+    cached = response_cache.get(body.query, body.domain) if response_cache else None
     if cached:
-        log.info("缓存命中: %s", request.query[:30])
-        _save_turn(session_id, request.query, cached["answer"])
+        log.info("缓存命中: %s", body.query[:30])
+        _save_turn(session_id, body.query, cached["answer"])
         return ChatResponse(**cached, session_id=session_id)
 
     history = _get_history(session_id)
     result = pipeline.chat(
-        query=request.query,
-        domain=request.domain,
-        top_k=request.top_k,
+        query=body.query,
+        domain=body.domain,
+        top_k=body.top_k,
         history=history,
     )
 
-    _save_turn(session_id, request.query, result["answer"])
+    _save_turn(session_id, body.query, result["answer"])
 
     # 写缓存
     if response_cache:
-        response_cache.put(request.query, result, request.domain)
+        response_cache.put(body.query, result, body.domain)
 
     return ChatResponse(**result, session_id=session_id)
 
 
 @app.post("/api/v1/chat/stream")
-async def chat_stream(request: ChatRequest):
+@limiter.limit("10/minute")
+async def chat_stream(request: Request, body: ChatRequest):
     if pipeline is None or pipeline.rag_retriever is None:
         async def error_stream():
             yield "data: " + json.dumps({"error": "知识库索引未加载"}, ensure_ascii=False) + "\n\n"
         return StreamingResponse(error_stream(), media_type="text/event-stream")
 
-    session_id = request.session_id or conv_manager.create_session()
+    session_id = body.session_id or conv_manager.create_session()
     history = _get_history(session_id)
 
     async def generate():
         full_answer = ""
         async for chunk in pipeline.chat_stream(
-            query=request.query,
-            domain=request.domain,
-            top_k=request.top_k,
+            query=body.query,
+            domain=body.domain,
+            top_k=body.top_k,
             history=history,
         ):
             if chunk.startswith("__SOURCES__:"):
@@ -327,10 +356,11 @@ async def switch_model(request: ModelSwitchRequest):
 
 
 @app.post("/api/v1/auth/send-code")
-async def send_code(request: SendCodeRequest):
+@limiter.limit("3/minute")
+async def send_code(request: Request, body: SendCodeRequest):
     """发送邮箱验证码"""
     from src.api.auth import send_verify_code
-    ok = send_verify_code(request.email, "register")
+    ok = send_verify_code(body.email, "register")
     if not ok:
         return JSONResponse(status_code=400, content={"error": "邮箱格式不正确或发送失败"})
     return {"status": "ok", "message": "验证码已发送"}

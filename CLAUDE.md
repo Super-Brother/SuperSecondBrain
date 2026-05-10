@@ -35,11 +35,28 @@ pytest tests/ -v
 # 运行自动化评估
 python -c "from src.evaluation import RAGEvaluator; RAGEvaluator()"
 
-# Docker 企业级部署
+# Docker 轻量部署（推荐）
 docker-compose up -d
+
+# Docker 企业级完整部署（含 Milvus + vLLM）
+docker-compose -f docker-compose.full.yml up -d
 ```
 
 ## Architecture
+
+### RAG 全链路三阶段
+
+| 阶段 | 链路 | 状态 |
+|------|------|------|
+| ① 离线索引 | `原始文档 → DocumentRouter解析 → 文本切片 → Embedding → FAISS/Milvus` | ✅ 完整实现 |
+| ② 在线检索 | `Query改写+脱敏 → Hybrid检索(向量+BM25) → 权限过滤 → CrossEncoder Rerank` | ✅ 完整实现 |
+| ③ 生成 | `Prompt构建(上下文+历史) → LLM生成 → 答案脱敏 → 带来源引用返回` | ✅ 完整实现 |
+
+**已知缺口（按优先级排序）：**
+1. **多轮对话压缩** — 历史只取最近 20 条，无摘要压缩机制，长对话易超上下文窗口
+2. **分布式缓存** — `ResponseCache` 为内存 LRU，无 Redis 后端
+3. **限流熔断** — 无 API rate limiting，LLM 调用费用不可控
+4. **日志审计** — 只有基础 access log，无操作审计和 ELK 聚合
 
 ### 核心流水线 (src/retrievers/pipeline.py)
 

@@ -6,18 +6,20 @@ services:
     build: .
     ports:
       - "8000:8000"
-    env_file:
-      - .env
     environment:
       - VECTOR_STORE_BACKEND=milvus
       - MILVUS_HOST=milvus
       - MILVUS_PORT=19530
-      - REDIS_URL=redis://redis:6379/0
+      - LLM_BASE_URL=http://vllm:8000/v1
+      - LLM_MODEL=Qwen2.5-72B-Instruct
+      - SANITIZE_QUERY=true
+      - SANITIZE_ANSWER=true
     volumes:
       - ./data:/app/data
+      - ./docs:/app/docs:ro
     depends_on:
       - milvus
-      - redis
+      - vllm
     restart: unless-stopped
 
   # Milvus 向量数据库
@@ -54,13 +56,32 @@ services:
     volumes:
       - minio_data:/minio_data
     command: minio server /minio_data
+    ports:
+      - "9000:9000"
     restart: unless-stopped
 
-  # Redis 缓存
-  redis:
-    image: redis:7-alpine
+  # vLLM 推理服务（Qwen2.5-72B）
+  vllm:
+    image: vllm/vllm-openai:latest
+    runtime: nvidia
+    ports:
+      - "8001:8000"
     volumes:
-      - redis_data:/data
+      - ~/.cache/huggingface:/root/.cache/huggingface
+    environment:
+      - HF_TOKEN=${HF_TOKEN}
+    command: >
+      --model Qwen/Qwen2.5-72B-Instruct
+      --tensor-parallel-size 4
+      --max-model-len 32768
+      --dtype bfloat16
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 4
+              capabilities: [gpu]
     restart: unless-stopped
 
   # Prometheus 监控
@@ -86,6 +107,5 @@ volumes:
   milvus_data:
   etcd_data:
   minio_data:
-  redis_data:
   prometheus_data:
   grafana_data:

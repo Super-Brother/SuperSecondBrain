@@ -102,6 +102,31 @@ class LLMGenerator:
             "call_count": self.call_count,
         }
 
+    def summarize_conversation(self, history: list[dict]) -> str | None:
+        """对多轮对话历史进行摘要压缩"""
+        if not history or len(history) < 4:
+            return None
+
+        dialog = "\n".join(
+            f"{'用户' if m['role'] == 'user' else '助手'}：{m['content'][:200]}"
+            for m in history
+        )
+
+        try:
+            response = self.client.chat.completions.create(
+                model=self.config.model,
+                messages=[
+                    {"role": "system", "content": "你是一个对话摘要助手。请将以下多轮对话压缩为一段简洁的摘要，保留关键信息和用户核心诉求。只输出摘要内容，不要添加解释。"},
+                    {"role": "user", "content": dialog},
+                ],
+                temperature=0.1,
+                max_tokens=256,
+            )
+            self._track_usage(response)
+            return response.choices[0].message.content.strip()
+        except Exception:
+            return None
+
     def generate(
         self,
         query: str,

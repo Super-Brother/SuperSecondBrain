@@ -83,3 +83,18 @@ class ConversationManager:
             (limit,),
         ).fetchall()
         return [dict(r) for r in rows]
+
+    def get_message_count(self, session_id: str) -> int:
+        row = self.conn.execute(
+            "SELECT COUNT(*) FROM messages WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()
+        return row[0] if row else 0
+
+    def get_history_slice(self, session_id: str, offset: int = 0, limit: int = 20) -> list[Message]:
+        rows = self.conn.execute(
+            "SELECT role, content, timestamp FROM messages "
+            "WHERE session_id = ? ORDER BY timestamp ASC LIMIT ? OFFSET ?",
+            (session_id, limit, offset),
+        ).fetchall()
+        return [Message(role=r["role"], content=r["content"], timestamp=r["timestamp"]) for r in rows]

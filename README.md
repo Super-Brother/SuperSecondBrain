@@ -16,6 +16,52 @@ Prompt构建 → LLM生成 → 答案脱敏 → 答案+来源引用
 参考资料（按相关性排序）
 ```
 
+### RAG 全链路三阶段
+
+**① 离线索引链路（Indexing Pipeline）**
+```
+原始文档 → 文档解析 → 文本切片(Chunking) → 向量化(Embedding) → 存入向量数据库
+```
+| 环节 | 实现状态 | 说明 |
+|------|----------|------|
+| 文档解析 | ✅ | `DocumentRouter` 支持 `.md` `.pdf` `.docx` `.pptx` `.xlsx`，自动路由对应解析器 |
+| 文本切片 | ✅ | 中文优化的 `RecursiveCharacterTextSplitter`，按二级标题→段落→句号→逗号优先级切分 |
+| 向量化 | ✅ | `BAAI/bge-large-zh-v1.5` (768d)，延迟加载 |
+| 存储 | ✅ | FAISS（本地）/ Milvus（分布式），`VECTOR_STORE_BACKEND` 环境变量切换 |
+
+**② 在线检索链路（Retrieval Pipeline）**
+```
+用户提问 → Query优化 → 混合检索(向量+关键词) → 重排序(Rerank) → TopK相关片段
+```
+| 环节 | 实现状态 | 说明 |
+|------|----------|------|
+| Query优化 | ✅ | LLM 查询改写（口语化→检索关键词），可开关；Query 脱敏（手机号/身份证/邮箱/银行卡） |
+| 混合检索 | ✅ | 向量检索(0.7) + BM25关键词(0.3)，加权融合，支持 RRF；Milvus 支持元数据过滤 |
+| 权限过滤 | ✅ | `SearchConfig` 按 `user_departments` / `user_access_level` 过滤 |
+| 重排序 | ✅ | `BAAI/bge-reranker-base` CrossEncoder 精排 |
+
+**③ 生成链路（Generation Pipeline）**
+```
+检索结果 + 用户问题 → Prompt构建 → LLM生成 → 答案返回（含引用来源）
+```
+| 环节 | 实现状态 | 说明 |
+|------|----------|------|
+| Prompt构建 | ✅ | SYSTEM_PROMPT + 上下文片段（按相关性排序）+ 历史对话（最近 20 轮） |
+| LLM生成 | ✅ | OpenAI 兼容 API，支持同步 / SSE 流式；运行时可通过 `/api/v1/models/switch` 切换模型 |
+| 答案返回 | ✅ | 答案脱敏 + Obsidian 双向链接自动转为可点击 URL + 来源引用卡片 |
+
+### 缺失与待完善
+
+| 能力 | 状态 | 优先级 |
+|------|------|--------|
+| 多轮对话压缩/摘要 | ❌ | 高 — 长对话历史超出上下文窗口时无压缩机制 |
+| 检索结果缓存（Redis） | ❌ | 高 — 当前仅内存 LRU 缓存 |
+| 限流熔断 | ❌ | 高 — 无 API 限流，LLM 费用不可控 |
+| 日志审计（ELK） | ❌ | 中 — 只有基础请求日志 |
+| IM 集成（企微/飞书/钉钉） | ❌ | 中 — 仅 Web UI |
+| 文档版本管理 / 增量更新 | ❌ | 低 — 索引需全量重建 |
+| 对象存储（MinIO/Ceph） | ❌ | 低 — 直接读取本地文件系统 |
+
 ## 核心特性
 
 ### 基础能力
@@ -192,31 +238,63 @@ secondbrain-chat/
 
 ## Docker 部署
 
-### 基础部署（本地 Ollama）
+### 快速部署（推荐）
+
+适用于生产服务器的轻量级部署，使用 FAISS + 外部 LLM API（DeepSeek/OpenAI）：
 
 ```bash
+# 1. 准备环境变量
+cp .env.example .env
+# 编辑 .env，配置你的 LLM API 地址和密钥
+
+# 2. 启动服务（API + Redis + Prometheus + Grafana）
 docker-compose up -d
-```
 
-### 企业级部署（Milvus + vLLM + 监控）
-
-```bash
-# 启动完整栈：FastAPI + Milvus + etcd + minio + vLLM + Prometheus + Grafana
-docker-compose -f docker-compose.yml up -d
-
-# 查看各服务状态
+# 3. 查看状态
 docker-compose ps
-
-# 查看 API 日志
 docker-compose logs -f api
 ```
 
-**访问地址：**
-- API: http://localhost:8000
-- Milvus: localhost:19530
-- vLLM: http://localhost:8001
-- Prometheus: http://localhost:9090
-- Grafana: http://localhost:3000
+**包含服务：**
+| 服务 | 地址 | 说明 |
+|------|------|------|
+| API | `:8000` | FastAPI 主服务 |
+| Redis | 内部 | 分布式缓存（可选，未配置 REDIS_URL 则使用内存缓存） |
+| Prometheus | `:9090` | 指标采集 |
+| Grafana | `:3000` | 可视化面板 |
+
+**环境变量配置（`.env`）：**
+```bash
+# 必填：LLM 配置
+LLM_BASE_URL=https://api.deepseek.com/v1
+LLM_API_KEY=sk-xxxxxxxx
+LLM_MODEL=deepseek-chat
+
+# 可选：Redis 缓存
+# REDIS_URL=redis://redis:6379/0
+
+# 可选：SMTP 邮件（用于注册验证码）
+# SMTP_HOST=smtp.126.com
+# SMTP_PORT=25
+# SMTP_USER=yourname@126.com
+# SMTP_PASSWORD=授权码
+```
+
+### 企业级完整部署
+
+需要 GPU 服务器，包含 Milvus + vLLM 本地推理：
+
+```bash
+docker-compose -f docker-compose.full.yml up -d
+```
+
+**包含额外服务：**
+| 服务 | 说明 |
+|------|------|
+| Milvus | 分布式向量数据库 |
+| etcd | Milvus 元数据存储 |
+| MinIO | 对象存储 |
+| vLLM | 本地 LLM 推理（需 4x GPU） |
 
 ## 评估
 
