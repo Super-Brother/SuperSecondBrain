@@ -30,6 +30,7 @@ from src.utils.cache import ResponseCache
 from src.utils.redis_cache import RedisCache
 from src.api.auth import APIKeyMiddleware
 from src.api.static import HTML_TEMPLATE
+from src.utils.vault_watcher import VaultWatcher
 
 # ---- 配置 ----
 
@@ -44,11 +45,12 @@ INDEX_DIR = os.getenv("INDEX_DIR", "data/index")
 pipeline: SecondBrainPipeline = None
 conv_manager: ConversationManager = None
 response_cache: ResponseCache = None
+vault_watcher: VaultWatcher = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global pipeline, conv_manager, response_cache
+    global pipeline, conv_manager, response_cache, vault_watcher
 
     config = PipelineConfig(
         vault_path=VAULT_PATH,
@@ -73,7 +75,21 @@ async def lifespan(app: FastAPI):
     else:
         log.warning("未找到索引，请运行: python scripts/build_index.py")
 
+    # 启动 Vault 自动同步
+    auto_sync = os.getenv("AUTO_SYNC", "false").lower() in ("true", "1", "yes")
+    if auto_sync:
+        debounce = float(os.getenv("AUTO_SYNC_DEBOUNCE", "5.0"))
+        vault_watcher = VaultWatcher(VAULT_PATH, pipeline, debounce_seconds=debounce)
+        try:
+            vault_watcher.start()
+        except FileNotFoundError:
+            log.warning("Vault 路径不存在，自动同步未启动: %s", VAULT_PATH)
+
     yield
+
+    # 清理
+    if vault_watcher is not None:
+        vault_watcher.stop()
 
 
 # ---- App ----
@@ -202,11 +218,16 @@ def _save_turn(session_id: str, query: str, answer: str):
 async def health_check():
     if pipeline is None:
         return {"status": "starting", "index_loaded": False}
-    return {
+    result = {
         "status": "ok",
         "index_loaded": pipeline.rag_retriever is not None,
         "stats": pipeline.get_stats(),
     }
+    if vault_watcher is not None:
+        result["auto_sync"] = vault_watcher.stats
+    else:
+        result["auto_sync"] = {"is_running": False}
+    return result
 
 
 @app.get("/stats")
