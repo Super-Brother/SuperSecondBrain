@@ -7,6 +7,7 @@ import os
 import subprocess
 import sys
 import time
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -29,8 +30,6 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
-limiter = Limiter(key_func=get_remote_address)
-
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from src.retrievers.pipeline import SecondBrainPipeline, PipelineConfig
@@ -46,6 +45,22 @@ from src.utils.model_config_store import (
     load_config as load_model_config,
     save_config as save_model_config,
 )
+from src.utils.metrics import get_metrics
+from src.utils.audit_logger import audit_log, AuditAction
+
+# slowapi 存储后端：优先 Redis，否则内存
+redis_url = os.getenv("REDIS_URL")
+if redis_url:
+    try:
+        from limits.storage import RedisStorage
+        storage = RedisStorage(redis_url)
+        limiter = Limiter(key_func=get_remote_address, storage_uri=redis_url)
+        log.info("slowapi 使用 Redis 存储后端")
+    except Exception as e:
+        log.warning("slowapi Redis 存储初始化失败，回退到内存: %s", e)
+        limiter = Limiter(key_func=get_remote_address)
+else:
+    limiter = Limiter(key_func=get_remote_address)
 
 # ---- 配置 ----
 
@@ -97,8 +112,15 @@ async def lifespan(app: FastAPI):
     conv_manager = ConversationManager()
     redis_url = os.getenv("REDIS_URL")
     if redis_url:
-        response_cache = RedisCache(redis_url=redis_url, ttl_seconds=int(os.getenv("CACHE_TTL", "3600")))
-        log.info("Redis 缓存已启用: %s", redis_url)
+        try:
+            response_cache = RedisCache(
+                redis_url=redis_url,
+                ttl_seconds=int(os.getenv("CACHE_TTL", "3600")),
+            )
+            log.info("Redis 缓存已启用: %s", redis_url)
+        except Exception as e:
+            log.warning("Redis 缓存连接失败，回退到内存缓存: %s", e)
+            response_cache = ResponseCache(max_size=256, ttl_seconds=int(os.getenv("CACHE_TTL", "3600")))
     else:
         response_cache = ResponseCache(max_size=256, ttl_seconds=int(os.getenv("CACHE_TTL", "3600")))
 
@@ -157,11 +179,45 @@ if api_key:
 # ---- 请求计时中间件 ----
 
 @app.middleware("http")
-async def log_requests(request, call_next):
+async def log_requests(request: Request, call_next):
+    """请求计时与增强日志中间件
+
+    生成 X-Request-ID，记录延迟、IP、User-Agent、用户身份和 Metrics。
+    """
+    metrics = get_metrics()
+    request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
+    request.state.request_id = request_id
+
     start = time.time()
     response = await call_next(request)
-    latency = (time.time() - start) * 1000
-    log.info("%s %s → %d (%.0fms)", request.method, request.url.path, response.status_code, latency)
+    latency_ms = (time.time() - start) * 1000
+
+    # 提取客户端信息
+    forwarded = request.headers.get("X-Forwarded-For")
+    client_ip = forwarded.split(",")[0].strip() if forwarded else (request.client.host if request.client else "-")
+    user_agent = request.headers.get("User-Agent", "-")
+    user = getattr(request.state, "user", None) or "-"
+
+    # Metrics 记录
+    metrics.record_latency("request", latency_ms)
+    status_bucket = f"request_{response.status_code // 100}xx"
+    metrics.increment(status_bucket)
+
+    # 结构化日志
+    log.info(
+        "[%s] %s %s → %d (%.0fms) | ip=%s user=%s ua=%s",
+        request_id,
+        request.method,
+        request.url.path,
+        response.status_code,
+        latency_ms,
+        client_ip,
+        user,
+        user_agent[:50],
+    )
+
+    # 响应头中返回 Request-ID
+    response.headers["X-Request-ID"] = request_id
     return response
 
 
@@ -237,7 +293,8 @@ class SyncTriggerRequest(BaseModel):
 def _get_history(session_id: str | None) -> list[dict] | None:
     if not session_id or conv_manager is None:
         return None
-    messages = conv_manager.get_history(session_id)
+    # 获取更大的历史范围，确保压缩逻辑有机会触发
+    messages = conv_manager.get_history(session_id, limit=100)
     if not messages:
         return None
     history = [{"role": m.role, "content": m.content} for m in messages]
@@ -287,6 +344,9 @@ async def get_stats():
     if pipeline.llm_generator:
         stats["token_usage"] = pipeline.llm_generator.get_usage_stats()
     stats["cache_size"] = response_cache.size if response_cache else 0
+    # 附加 Metrics 汇总
+    metrics = get_metrics()
+    stats["metrics"] = metrics.get_summary()
     return stats
 
 
@@ -355,6 +415,14 @@ async def chat(request: Request, body: ChatRequest):
     if response_cache:
         response_cache.put(body.query, result, body.domain)
 
+    # 审计日志
+    audit_log(
+        AuditAction.CHAT,
+        request,
+        details={"query": body.query[:200], "domain": body.domain, "session_id": session_id},
+        status="success",
+    )
+
     return ChatResponse(**result, session_id=session_id)
 
 
@@ -368,6 +436,14 @@ async def chat_stream(request: Request, body: ChatRequest):
 
     session_id = body.session_id or conv_manager.create_session()
     history = _get_history(session_id)
+
+    # 流式请求审计日志（请求开始时记录）
+    audit_log(
+        AuditAction.CHAT_STREAM,
+        request,
+        details={"query": body.query[:200], "domain": body.domain, "session_id": session_id},
+        status="success",
+    )
 
     async def generate():
         full_answer = ""
@@ -398,8 +474,14 @@ async def list_domains():
 
 
 @app.post("/api/v1/feedback")
-async def submit_feedback(request: FeedbackRequest):
-    log.info("反馈: session=%s rating=%d query=%s", request.session_id, request.rating, request.query[:30])
+async def submit_feedback(request: Request, body: FeedbackRequest):
+    log.info("反馈: session=%s rating=%d query=%s", body.session_id, body.rating, body.query[:30])
+    audit_log(
+        AuditAction.FEEDBACK,
+        request,
+        details={"session_id": body.session_id, "rating": body.rating, "query": body.query[:200]},
+        status="success",
+    )
     return {"status": "ok"}
 
 
@@ -482,6 +564,12 @@ async def switch_model(request: ModelSwitchRequest):
     ))
 
     log.info("模型切换并持久化: preset=%s model=%s base_url=%s", preset_key, llm_config.model, llm_config.base_url)
+    audit_log(
+        AuditAction.MODEL_SWITCH,
+        request,
+        details={"preset": preset_key, "model": llm_config.model, "base_url": llm_config.base_url},
+        status="success",
+    )
     return result
 
 
@@ -507,32 +595,37 @@ async def verify_email_code(request: VerifyCodeRequest):
 
 
 @app.post("/api/v1/auth/register")
-async def register(request: RegisterRequest):
+async def register(request: Request, body: RegisterRequest):
     """注册（需要邮箱验证码）"""
     from src.api.auth import verify_code, register_user, create_token
 
     # 验证邮箱验证码
-    if not verify_code(request.email, request.verify_code, "register"):
+    if not verify_code(body.email, body.verify_code, "register"):
+        audit_log(AuditAction.REGISTER, request, details={"email": body.email}, status="failure")
         return JSONResponse(status_code=400, content={"error": "验证码错误或已过期"})
 
-    ok, error = register_user(request.username, request.email, request.password)
+    ok, error = register_user(body.username, body.email, body.password)
     if not ok:
+        audit_log(AuditAction.REGISTER, request, details={"email": body.email, "error": error}, status="failure")
         return JSONResponse(status_code=400, content={"error": error})
 
-    token = create_token(request.username, request.email)
-    return {"token": token, "username": request.username, "email": request.email}
+    token = create_token(body.username, body.email)
+    audit_log(AuditAction.REGISTER, request, details={"username": body.username, "email": body.email}, status="success")
+    return {"token": token, "username": body.username, "email": body.email}
 
 
 @app.post("/api/v1/auth/login")
-async def login(request: LoginRequest):
+async def login(request: Request, body: LoginRequest):
     """登录（支持用户名或邮箱）"""
     from src.api.auth import authenticate_user, create_token
 
-    ok, user_info = authenticate_user(request.login, request.password)
+    ok, user_info = authenticate_user(body.login, body.password)
     if not ok:
+        audit_log(AuditAction.LOGIN, request, details={"login": body.login}, status="failure")
         return JSONResponse(status_code=401, content={"error": "用户名/邮箱或密码错误"})
 
     token = create_token(user_info["username"], user_info["email"])
+    audit_log(AuditAction.LOGIN, request, details={"username": user_info["username"], "email": user_info["email"]}, status="success")
     return {"token": token, "username": user_info["username"], "email": user_info["email"]}
 
 
@@ -630,6 +723,12 @@ async def sync_webhook(request: Request):
             },
         )
 
+    audit_log(
+        AuditAction.SYNC,
+        request,
+        details={"source": "webhook", "rebuild_stats": stats},
+        status="success",
+    )
     return {
         "status": "ok",
         "sync_output": sync_output,
@@ -638,7 +737,7 @@ async def sync_webhook(request: Request):
 
 
 @app.post("/api/v1/sync/trigger")
-async def sync_trigger(body: SyncTriggerRequest | None = None):
+async def sync_trigger(request: Request, body: SyncTriggerRequest | None = None):
     """手动触发索引重建"""
     if pipeline is None:
         return JSONResponse(
@@ -653,16 +752,18 @@ async def sync_trigger(body: SyncTriggerRequest | None = None):
         else:
             stats = pipeline.rebuild_index_from_vault()
     except Exception as e:
+        audit_log(AuditAction.SYNC, request, details={"incremental": incremental, "error": str(e)}, status="error")
         return JSONResponse(
             status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={"error": str(e)},
         )
 
+    audit_log(AuditAction.SYNC, request, details={"incremental": incremental, "rebuild_stats": stats}, status="success")
     return {"status": "ok", "rebuild_stats": stats}
 
 
 @app.post("/api/v1/documents/upload")
-async def upload_document(file: UploadFile = File(...)):
+async def upload_document(request: Request, file: UploadFile = File(...)):
     """上传单个文档到 vault 并触发索引重建"""
     from src.parsers.document_router import PARSER_MAP
 
@@ -717,6 +818,12 @@ async def upload_document(file: UploadFile = File(...)):
             content={"error": f"Index rebuild failed: {str(e)}"},
         )
 
+    audit_log(
+        AuditAction.UPLOAD,
+        request,
+        details={"filename": safe_name, "size": len(content), "rebuild_stats": stats},
+        status="success",
+    )
     return {
         "status": "ok",
         "filename": safe_name,
@@ -726,7 +833,7 @@ async def upload_document(file: UploadFile = File(...)):
 
 
 @app.post("/api/v1/documents/batch-upload")
-async def batch_upload_documents(files: list[UploadFile] = File(...)):
+async def batch_upload_documents(request: Request, files: list[UploadFile] = File(...)):
     """批量上传文档到 vault 并触发索引重建"""
     from src.parsers.document_router import PARSER_MAP
 
@@ -781,6 +888,12 @@ async def batch_upload_documents(files: list[UploadFile] = File(...)):
             content={"error": f"Index rebuild failed: {str(e)}"},
         )
 
+    audit_log(
+        AuditAction.UPLOAD,
+        request,
+        details={"batch": True, "count": len(saved_files), "errors": len(errors), "rebuild_stats": stats},
+        status="success" if not errors else "partial",
+    )
     return {
         "status": "ok",
         "saved_files": saved_files,

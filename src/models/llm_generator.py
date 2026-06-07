@@ -7,9 +7,13 @@
 """
 
 import os
-import json
+import time
 from dataclasses import dataclass
+
 from openai import OpenAI
+
+from src.utils.circuit_breaker import get_circuit_breaker, CircuitBreakerOpen
+from src.utils.logger import log
 
 
 # 预设模型配置
@@ -38,17 +42,22 @@ PRESET_MODELS = {
 @dataclass
 class LLMConfig:
     """LLM 配置"""
+
     base_url: str | None = None
     api_key: str | None = None
     model: str | None = None
     temperature: float = 0.3
     max_tokens: int = 1024
+    timeout: float = 30.0
+    stream_timeout: float = 60.0
 
     def __post_init__(self):
         # 从环境变量读取默认值
         self.base_url = self.base_url or os.getenv("LLM_BASE_URL", "http://localhost:11434/v1")
         self.api_key = self.api_key or os.getenv("LLM_API_KEY", "not-needed")
         self.model = self.model or os.getenv("LLM_MODEL", "qwen2.5:3b")
+        self.timeout = self.timeout or float(os.getenv("LLM_TIMEOUT", "30"))
+        self.stream_timeout = self.stream_timeout or float(os.getenv("LLM_STREAM_TIMEOUT", "60"))
 
 
 class LLMGenerator:
@@ -59,10 +68,13 @@ class LLMGenerator:
         self.client = OpenAI(
             base_url=self.config.base_url,
             api_key=self.config.api_key,
+            timeout=self.config.timeout,
         )
         self.total_prompt_tokens = 0
         self.total_completion_tokens = 0
         self.call_count = 0
+        # 熔断器实例
+        self._breaker = get_circuit_breaker(name="llm")
 
     def update_config(self, config: LLMConfig) -> None:
         """运行时切换模型配置"""
@@ -70,6 +82,7 @@ class LLMGenerator:
         self.client = OpenAI(
             base_url=self.config.base_url,
             api_key=self.config.api_key,
+            timeout=self.config.timeout,
         )
 
     @staticmethod
@@ -116,7 +129,10 @@ class LLMGenerator:
             response = self.client.chat.completions.create(
                 model=self.config.model,
                 messages=[
-                    {"role": "system", "content": "你是一个对话摘要助手。请将以下多轮对话压缩为一段简洁的摘要，保留关键信息和用户核心诉求。只输出摘要内容，不要添加解释。"},
+                    {
+                        "role": "system",
+                        "content": "你是一个对话摘要助手。请将以下多轮对话压缩为一段简洁的摘要，保留关键信息和用户核心诉求。只输出摘要内容，不要添加解释。",
+                    },
                     {"role": "user", "content": dialog},
                 ],
                 temperature=0.1,
@@ -124,7 +140,8 @@ class LLMGenerator:
             )
             self._track_usage(response)
             return response.choices[0].message.content.strip()
-        except Exception:
+        except Exception as e:
+            log.warning("对话摘要失败: %s", e)
             return None
 
     def generate(
@@ -133,18 +150,24 @@ class LLMGenerator:
         context_docs: list,
         history: list[dict] | None = None,
     ) -> str:
-        """基于检索结果生成答案，支持多轮对话历史"""
+        """基于检索结果生成答案，支持多轮对话历史（带熔断保护）"""
         messages = self._build_messages(query, context_docs, history)
 
-        response = self.client.chat.completions.create(
-            model=self.config.model,
-            messages=messages,
-            temperature=self.config.temperature,
-            max_tokens=self.config.max_tokens,
-        )
+        def _call():
+            response = self.client.chat.completions.create(
+                model=self.config.model,
+                messages=messages,
+                temperature=self.config.temperature,
+                max_tokens=self.config.max_tokens,
+            )
+            self._track_usage(response)
+            return response.choices[0].message.content
 
-        self._track_usage(response)
-        return response.choices[0].message.content
+        try:
+            return self._breaker.call(_call)
+        except CircuitBreakerOpen:
+            log.warning("LLM 熔断器打开，返回降级答案")
+            return "（服务暂时不可用，请稍后重试。如果问题持续，请联系管理员。）"
 
     async def generate_stream(
         self,
@@ -152,20 +175,33 @@ class LLMGenerator:
         context_docs: list,
         history: list[dict] | None = None,
     ):
-        """流式生成答案，支持多轮对话历史"""
+        """流式生成答案，支持多轮对话历史（带熔断保护和异常处理）"""
+        if self._breaker.state.value == "open":
+            log.warning("LLM 熔断器打开，流式请求被拒绝")
+            yield "（服务暂时不可用，请稍后重试。）"
+            return
+
         messages = self._build_messages(query, context_docs, history)
 
-        stream = self.client.chat.completions.create(
-            model=self.config.model,
-            messages=messages,
-            temperature=self.config.temperature,
-            max_tokens=self.config.max_tokens,
-            stream=True,
-        )
+        try:
+            stream = self.client.chat.completions.create(
+                model=self.config.model,
+                messages=messages,
+                temperature=self.config.temperature,
+                max_tokens=self.config.max_tokens,
+                stream=True,
+            )
 
-        for chunk in stream:
-            if chunk.choices[0].delta.content:
-                yield chunk.choices[0].delta.content
+            for chunk in stream:
+                if chunk.choices[0].delta.content:
+                    yield chunk.choices[0].delta.content
+
+            # 流式成功，记录成功
+            self._breaker.record_success()
+        except Exception as e:
+            log.error("流式生成异常: %s", e)
+            self._breaker.record_failure()
+            yield f"\n\n[生成中断：{str(e)}]"
 
     def _build_messages(
         self,
@@ -195,7 +231,7 @@ class LLMGenerator:
             content = doc.page_content.strip()
 
             context_parts.append(
-                f"【参考资料{i+1}】标题：{title}\n"
+                f"【参考资料{i + 1}】标题：{title}\n"
                 f"来源：{source}\n"
                 f"内容：{content}"
             )
