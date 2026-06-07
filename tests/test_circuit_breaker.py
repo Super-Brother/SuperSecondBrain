@@ -104,3 +104,42 @@ class TestCircuitBreaker:
         result = cb.call(success_func, 1, 2)
         assert result == 3
         assert cb.state == CircuitState.CLOSED
+
+
+class TestCircuitBreakerPerNameConfig:
+    """按名称独立配置测试"""
+
+    def test_name_specific_env_var(self, monkeypatch):
+        """按名称的环境变量应生效"""
+        monkeypatch.setenv("CIRCUIT_BREAKER_SUMMARIZER_FAILURE_THRESHOLD", "3")
+        monkeypatch.setenv("CIRCUIT_BREAKER_SUMMARIZER_RECOVERY_TIMEOUT", "30")
+
+        cb = CircuitBreaker(name="summarizer")
+        assert cb.failure_threshold == 3
+        assert cb.recovery_timeout == 30.0
+
+    def test_fallback_to_generic_env_var(self, monkeypatch):
+        """没有名称特定配置时回退到通用配置"""
+        monkeypatch.delenv("CIRCUIT_BREAKER_OTHER_FAILURE_THRESHOLD", raising=False)
+        monkeypatch.setenv("CIRCUIT_BREAKER_FAILURE_THRESHOLD", "7")
+
+        cb = CircuitBreaker(name="other")
+        assert cb.failure_threshold == 7
+
+    def test_explicit_param_overrides_env(self, monkeypatch):
+        """显式参数应覆盖环境变量"""
+        monkeypatch.setenv("CIRCUIT_BREAKER_SUMMARIZER_FAILURE_THRESHOLD", "10")
+
+        cb = CircuitBreaker(name="summarizer", failure_threshold=2)
+        assert cb.failure_threshold == 2
+
+    def test_summarizer_is_independent_from_llm(self, monkeypatch):
+        """summarizer 和 llm 熔断器应相互独立"""
+        monkeypatch.setenv("CIRCUIT_BREAKER_SUMMARIZER_FAILURE_THRESHOLD", "2")
+        monkeypatch.setenv("CIRCUIT_BREAKER_LLM_FAILURE_THRESHOLD", "5")
+
+        cb_summarizer = CircuitBreaker(name="summarizer")
+        cb_llm = CircuitBreaker(name="llm")
+
+        assert cb_summarizer.failure_threshold == 2
+        assert cb_llm.failure_threshold == 5

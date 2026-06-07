@@ -73,8 +73,10 @@ class LLMGenerator:
         self.total_prompt_tokens = 0
         self.total_completion_tokens = 0
         self.call_count = 0
-        # 熔断器实例
+        # 主 LLM 熔断器实例
         self._breaker = get_circuit_breaker(name="llm")
+        # 对话摘要熔断器（独立配置，更保守）
+        self._summarizer_breaker = get_circuit_breaker(name="summarizer")
 
     def update_config(self, config: LLMConfig) -> None:
         """运行时切换模型配置"""
@@ -116,7 +118,7 @@ class LLMGenerator:
         }
 
     def summarize_conversation(self, history: list[dict]) -> str | None:
-        """对多轮对话历史进行摘要压缩"""
+        """对多轮对话历史进行摘要压缩（带熔断保护）"""
         if not history or len(history) < 4:
             return None
 
@@ -125,7 +127,7 @@ class LLMGenerator:
             for m in history
         )
 
-        try:
+        def _call():
             response = self.client.chat.completions.create(
                 model=self.config.model,
                 messages=[
@@ -137,9 +139,16 @@ class LLMGenerator:
                 ],
                 temperature=0.1,
                 max_tokens=256,
+                timeout=10.0,  # 摘要调用独立超时（更短）
             )
             self._track_usage(response)
             return response.choices[0].message.content.strip()
+
+        try:
+            return self._summarizer_breaker.call(_call)
+        except CircuitBreakerOpen:
+            log.warning("摘要熔断器已打开，跳过对话压缩")
+            return None
         except Exception as e:
             log.warning("对话摘要失败: %s", e)
             return None

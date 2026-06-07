@@ -62,11 +62,17 @@ docker-compose -f docker-compose.full.yml up -d
 | ② 在线检索 | `Query改写+脱敏 → Hybrid检索(向量+BM25) → 权限过滤 → CrossEncoder Rerank` | ✅ 完整实现 |
 | ③ 生成 | `Prompt构建(上下文+历史) → LLM生成 → 答案脱敏 → 带来源引用返回` | ✅ 完整实现 |
 
+**已解决缺口：**
+1. ✅ **多轮对话压缩** — `_get_history()` limit=100，超过 20 条时调用 `summarize_conversation()` 生成摘要并压缩早期对话
+2. ✅ **分布式缓存** — `RedisCache` 支持 TTL、键前缀、连接健康检查；Redis 故障自动回退到内存 `ResponseCache`
+3. ✅ **限流熔断** — slowapi 限流（Redis 存储后端）+ `CircuitBreaker` 三态熔断器 + LLM 调用超时（30s）
+4. ✅ **日志审计** — `Logger` 支持 RotatingFileHandler + JSON 结构化格式；`AuditLogger`（SQLite）覆盖 8 个关键操作；请求中间件增强（X-Request-ID、IP、User-Agent、Metrics）
+
 **已知缺口（按优先级排序）：**
-1. **多轮对话压缩** — 历史只取最近 20 条，无摘要压缩机制，长对话易超上下文窗口
-2. **分布式缓存** — `ResponseCache` 为内存 LRU，无 Redis 后端
-3. **限流熔断** — 无 API rate limiting，LLM 调用费用不可控
-4. **日志审计** — 只有基础 access log，无操作审计和 ELK 聚合
+1. **用户认证体系** — 存在 Login/Register 端点和 `APIKeyMiddleware`，但 `request.state.user` 始终为空，审计日志无法关联真实用户身份
+2. **对话摘要熔断保护** — `summarize_conversation()` 直接调用 LLM，未接入 `CircuitBreaker`，LLM 不稳定时可能阻塞历史压缩流程
+3. **Metrics 持久化与告警** — `MetricsCollector` 纯内存存储，重启后丢失；缺少 Prometheus `/metrics` 导出端点和告警阈值配置
+4. **索引版本管理与灰度** — 全量重建索引风险高，无版本号、无新旧索引切换机制、无回滚能力
 
 ### 核心流水线 (src/retrievers/pipeline.py)
 
@@ -95,7 +101,11 @@ docker-compose -f docker-compose.full.yml up -d
 - **src/models/llm_generator.py**: OpenAI 兼容客户端，支持同步和流式生成，SYSTEM_PROMPT 定义助手行为约束
 - **src/utils/sanitizer.py**: 数据脱敏（Query / Document / Answer），支持手机号、身份证号、邮箱、银行卡号
 - **src/evaluation/rag_evaluator.py**: RAGAS 自动化评估 + 启发式降级评估，指标：faithfulness / answer_relevancy / context_recall / context_precision
-- **src/utils/metrics.py**: Prometheus 风格指标收集，支持延迟分位数（P50/P95/P99）、Token 使用量、成功率
+- **src/utils/logger.py**: 统一日志配置，支持 stdout + RotatingFileHandler 双输出、JSON 结构化格式、环境变量控制级别和格式
+- **src/utils/audit_logger.py**: 审计日志模块（SQLite 后端），覆盖 chat/upload/sync/model_switch/login/register/feedback 8 类操作，支持按用户/动作/时间查询
+- **src/utils/circuit_breaker.py**: 三态熔断器（CLOSED/OPEN/HALF_OPEN），装饰器模式保护任意函数调用，支持环境变量配置阈值和恢复超时
+- **src/utils/redis_cache.py**: Redis 分布式缓存后端，与 `ResponseCache` 接口兼容，支持 TTL、键前缀、连接健康检查
+- **src/utils/metrics.py**: 内存指标收集器，支持延迟分位数（P50/P95/P99）、Token 使用量、成功率；通过 `/stats` 端点暴露
 - **src/utils/vault_watcher.py**: watchdog 文件监控器，监听 vault 目录变更自动触发增量索引重建；防抖（默认 5s）、过滤非文档文件、线程安全加锁
 - **src/api/app.py**: FastAPI 端点 `/health` `/stats` `/api/v1/chat` `/api/v1/chat/stream` `/api/v1/domains` `/api/v1/sync/webhook` `/api/v1/sync/trigger` `/api/v1/documents/upload` `/api/v1/documents/batch-upload`，启动时自动加载索引
 - **scripts/**: `build_index.py` 构建索引，`gradio_app.py` Gradio 前端
@@ -110,6 +120,9 @@ docker-compose -f docker-compose.full.yml up -d
 - **延迟加载**: Embedding 模型和 Reranker 通过 `@property` 延迟初始化，避免启动时加载大模型
 - **数据脱敏**: 三级脱敏架构，可在 `.env` 中独立开关 Query / Document / Answer 脱敏
 - **Vault 自动同步**: `AUTO_SYNC=true` 启用 watchdog 监听 vault 目录，文件变更后防抖触发增量索引重建（`AUTO_SYNC_DEBOUNCE` 控制延迟），排除 `.obsidian/.trash/.git` 等目录
+- **缓存双后端**: `ResponseCache`（内存 LRU）作为默认缓存；配置 `REDIS_URL` 后自动升级为 `RedisCache`（Redis），连接失败时回退到内存缓存
+- **熔断保护**: LLM 调用（同步和流式）均通过 `CircuitBreaker` 保护，连续失败 5 次后自动熔断，60s 后进入半开探测
+- **限流**: `slowapi` 限流器限制 `/api/v1/chat` 和 `/api/v1/chat/stream` 为 10 次/分钟；配置 `REDIS_URL` 后多实例共享限流状态
 - **服务器轻量部署**: `docker-compose.server.yml` 使用 FAISS + Redis，Dockerfile 配置国内镜像源（清华 PyPI + 阿里云 Debian），`deploy_server.sh` 一键部署含代理检测
 - **环境变量**: 所有配置通过 `.env` 管理，见 `.env.example`
 

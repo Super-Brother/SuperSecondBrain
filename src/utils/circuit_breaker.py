@@ -33,9 +33,11 @@ class CircuitState(Enum):
 class CircuitBreaker:
     """熔断器
 
-    环境变量覆盖：
-        CIRCUIT_BREAKER_FAILURE_THRESHOLD: 失败阈值（默认 5）
-        CIRCUIT_BREAKER_RECOVERY_TIMEOUT: 恢复超时秒数（默认 60）
+    环境变量覆盖（按名称独立配置，回退到通用配置）：
+        CIRCUIT_BREAKER_{NAME}_FAILURE_THRESHOLD: 特定熔断器的失败阈值
+        CIRCUIT_BREAKER_{NAME}_RECOVERY_TIMEOUT: 特定熔断器的恢复超时秒数
+        CIRCUIT_BREAKER_FAILURE_THRESHOLD: 通用失败阈值（默认 5）
+        CIRCUIT_BREAKER_RECOVERY_TIMEOUT: 通用恢复超时秒数（默认 60）
     """
 
     def __init__(
@@ -45,12 +47,22 @@ class CircuitBreaker:
         recovery_timeout: float | None = None,
     ):
         self.name = name
-        self.failure_threshold = failure_threshold or int(
-            os.getenv("CIRCUIT_BREAKER_FAILURE_THRESHOLD", "5")
-        )
-        self.recovery_timeout = recovery_timeout or float(
-            os.getenv("CIRCUIT_BREAKER_RECOVERY_TIMEOUT", "60")
-        )
+        # 按熔断器名称读取独立配置，回退到通用配置
+        if failure_threshold is not None:
+            self.failure_threshold = failure_threshold
+        else:
+            specific_env = f"CIRCUIT_BREAKER_{name.upper()}_FAILURE_THRESHOLD"
+            self.failure_threshold = int(
+                os.getenv(specific_env) or os.getenv("CIRCUIT_BREAKER_FAILURE_THRESHOLD", "5")
+            )
+
+        if recovery_timeout is not None:
+            self.recovery_timeout = recovery_timeout
+        else:
+            specific_env = f"CIRCUIT_BREAKER_{name.upper()}_RECOVERY_TIMEOUT"
+            self.recovery_timeout = float(
+                os.getenv(specific_env) or os.getenv("CIRCUIT_BREAKER_RECOVERY_TIMEOUT", "60")
+            )
 
         self._state = CircuitState.CLOSED
         self._failure_count = 0

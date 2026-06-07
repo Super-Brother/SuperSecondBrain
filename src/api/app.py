@@ -47,6 +47,7 @@ from src.utils.model_config_store import (
 )
 from src.utils.metrics import get_metrics
 from src.utils.audit_logger import audit_log, AuditAction
+from src.utils.circuit_breaker import CircuitBreakerOpen
 
 # slowapi 存储后端：优先 Redis，否则内存
 redis_url = os.getenv("REDIS_URL")
@@ -305,6 +306,10 @@ def _get_history(session_id: str | None) -> list[dict] | None:
             summary = pipeline.llm_generator.summarize_conversation(early)
             if summary:
                 return [{"role": "system", "content": f"历史对话摘要：{summary}"}] + history[-10:]
+        except CircuitBreakerOpen:
+            # 熔断器打开时，降级为返回最近 20 条完整历史
+            log.warning("摘要熔断器已打开，降级为返回最近 20 条历史")
+            return history[-20:]
         except Exception:
             pass
     return history
