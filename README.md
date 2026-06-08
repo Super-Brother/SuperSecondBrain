@@ -46,7 +46,7 @@ Prompt构建 → LLM生成 → 答案脱敏 → 答案+来源引用
 ```
 | 环节 | 实现状态 | 说明 |
 |------|----------|------|
-| Prompt构建 | ✅ | SYSTEM_PROMPT + 上下文片段（按相关性排序）+ 历史对话（最近 20 轮） |
+| Prompt构建 | ✅ | SYSTEM_PROMPT + 上下文片段（按相关性排序）+ 历史对话（最近 20 轮，超过 20 条时自动摘要压缩，熔断保护） |
 | LLM生成 | ✅ | OpenAI 兼容 API，支持同步 / SSE 流式；运行时可通过 `/api/v1/models/switch` 切换模型 |
 | 答案返回 | ✅ | 答案脱敏 + Obsidian 双向链接自动转为可点击 URL + 来源引用卡片 |
 
@@ -54,25 +54,27 @@ Prompt构建 → LLM生成 → 答案脱敏 → 答案+来源引用
 
 | 能力 | 状态 | 优先级 |
 |------|------|--------|
-| 多轮对话压缩/摘要 | ❌ | 高 — 长对话历史超出上下文窗口时无压缩机制 |
-| 检索结果缓存（Redis） | ❌ | 高 — 当前仅内存 LRU 缓存 |
-| 限流熔断 | ❌ | 高 — 无 API 限流，LLM 费用不可控 |
-| 日志审计（ELK） | ❌ | 中 — 只有基础请求日志 |
+| 用户认证体系 | ⚠️ | 高 — Login/Register 端点已存在，但 `request.state.user` 始终为空，审计日志无法关联真实用户 |
+| Metrics 持久化与告警 | ❌ | 高 — `MetricsCollector` 纯内存存储，重启丢失；缺少 Prometheus `/metrics` 导出端点和告警阈值配置 |
+| 索引版本管理与灰度 | ❌ | 中 — 全量重建索引风险高，无版本号、无新旧索引切换机制、无回滚能力 |
 | IM 集成（企微/飞书/钉钉） | ❌ | 中 — 仅 Web UI |
-| 文档版本管理 / 增量更新 | ❌ | 低 — 索引需全量重建 |
 | 对象存储（MinIO/Ceph） | ❌ | 低 — 直接读取本地文件系统 |
 
 ## 核心特性
 
 ### 基础能力
-- **多轮对话记忆** — 基于 SQLite 的会话管理，支持上下文追问
+- **多轮对话记忆** — 基于 SQLite 的会话管理，支持上下文追问；超过 20 轮自动调用 LLM 摘要压缩早期对话
+- **流式输出** — SSE 流式返回，首 Token 延迟低，用户体验接近原生 ChatGPT
+- **可点击来源引用** — 答案中 Obsidian 双向链接自动转为可点击 URL，附带来源引用卡片
 - **增量索引** — 文件变更检测，只重建变更部分
 - **Vault 自动同步** — watchdog 监听 Obsidian vault 目录，文件变更后自动触发增量索引重建
 - **查询改写** — LLM 将口语化查询转为检索关键词
-- **混合检索** — BM25 关键词匹配 + 向量语义检索，分数加权融合
+- **混合检索** — BM25 关键词匹配 + 向量语义检索，分数加权融合，支持 RRF
 - **Rerank 重排序** — Cross-Encoder 精排，提升 Top-K 准确率
-- **响应缓存** — LRU 缓存重复查询，毫秒级响应
+- **响应缓存双后端** — 内存 LRU 缓存默认启用；配置 `REDIS_URL` 后自动升级为 Redis 分布式缓存，Redis 故障时自动降级回内存缓存
+- **限流熔断** — slowapi 限流（Redis 存储后端）+ `CircuitBreaker` 三态熔断器保护 LLM 调用，连续失败 5 次后自动熔断，60s 后半开探测
 - **Token 追踪** — 统计 LLM 用量
+- **日志审计** — RotatingFileHandler + JSON 结构化日志；SQLite 审计日志覆盖 chat/upload/sync/model_switch/login/register/feedback 8 类操作
 - **API Key 认证** — 可选的安全认证
 
 ### 企业级能力
@@ -81,8 +83,8 @@ Prompt构建 → LLM生成 → 答案脱敏 → 答案+来源引用
 - **权限隔离** — 部门 + 访问级别元数据过滤，检索时自动过滤无权文档
 - **数据脱敏** — Query / 文档 / 答案 三级脱敏，支持手机号、身份证、邮箱、银行卡
 - **自动化评估** — RAGAS 框架 + 启发式降级评估，持续监控 Faithfulness / Relevancy
-- **可观测性** — Prometheus + Grafana 监控延迟、成功率、Token 使用量
-- **容器化部署** — Docker Compose 编排 FastAPI + Milvus + vLLM + Prometheus + Grafana
+- **可观测性** — `MetricsCollector` 内存指标（P50/P95/P99 延迟、Token 用量、成功率）通过 `/stats` 端点暴露；Prometheus + Grafana 可视化
+- **容器化部署** — Docker Compose 编排 FastAPI + Redis + Prometheus + Grafana（轻量）；或 FastAPI + Milvus + vLLM + Prometheus + Grafana（企业级）
 
 ## 技术栈
 
@@ -181,14 +183,22 @@ results = rag_retriever.retrieve(query, config)
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | `/health` | 健康检查 |
-| GET | `/stats` | 知识库统计（含 Token 用量） |
+| GET | `/stats` | 知识库统计（含 Token 用量、P50/P95/P99 延迟） |
 | POST | `/api/v1/sessions` | 创建会话 |
 | GET | `/api/v1/sessions` | 列出会话 |
 | DELETE | `/api/v1/sessions/{id}` | 删除会话 |
+| GET | `/api/v1/sessions/{id}/messages` | 获取会话历史消息 |
 | POST | `/api/v1/chat` | 对话（非流式） |
 | POST | `/api/v1/chat/stream` | 对话（SSE 流式） |
 | GET | `/api/v1/domains` | 领域列表 |
 | POST | `/api/v1/feedback` | 提交反馈 |
+| GET | `/api/v1/models` | 列出可用模型 |
+| POST | `/api/v1/models/switch` | 切换 LLM 模型（支持热切换） |
+| POST | `/api/v1/auth/send-code` | 发送邮箱验证码 |
+| POST | `/api/v1/auth/verify-code` | 验证邮箱验证码 |
+| POST | `/api/v1/auth/register` | 用户注册 |
+| POST | `/api/v1/auth/login` | 用户登录 |
+| GET | `/api/v1/auth/me` | 获取当前用户信息 |
 | POST | `/api/v1/sync/webhook` | Webhook 同步触发（支持 GitHub/GitLab） |
 | POST | `/api/v1/sync/trigger` | 手动触发索引同步 |
 | POST | `/api/v1/documents/upload` | 单文件上传 |
@@ -219,10 +229,14 @@ secondbrain-chat/
 │   │   ├── llm_generator.py       # LLM 生成器
 │   │   └── conversation.py        # 会话管理
 │   ├── utils/                # 工具
-│   │   ├── logger.py              # 日志
-│   │   ├── cache.py               # 响应缓存
+│   │   ├── logger.py              # 日志（RotatingFileHandler + JSON 结构化）
+│   │   ├── cache.py               # 内存响应缓存（LRU）
+│   │   ├── redis_cache.py         # Redis 分布式缓存（自动降级回内存）
+│   │   ├── circuit_breaker.py     # 三态熔断器（CLOSED/OPEN/HALF_OPEN）
+│   │   ├── audit_logger.py        # 审计日志（SQLite 后端）
+│   │   ├── metrics.py             # 监控指标（延迟分位数 / Token / 成功率）
+│   │   ├── model_config_store.py  # 模型配置持久化（JSON）
 │   │   ├── sanitizer.py           # 数据脱敏
-│   │   ├── metrics.py             # 监控指标
 │   │   └── vault_watcher.py       # Vault 文件监控（自动同步）
 │   ├── evaluation/           # 评估
 │   │   └── rag_evaluator.py       # RAGAS 评估器
