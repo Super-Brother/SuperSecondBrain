@@ -5,8 +5,17 @@
   增量构建:   python scripts/build_index.py --incremental
 """
 
-import argparse
 import os
+
+# macOS MPS 内存分配器在模型预热时可能触发段错误，完全禁用 MPS 避免崩溃
+os.environ.setdefault("PYTORCH_MPS_HIGH_WATERMARK_RATIO", "0.0")
+os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+
+# 关键：在 jieba 等多线程库之前先初始化 torch，
+# 避免 PyTorch 线程状态与 jieba 多线程冲突导致的段错误 (macOS)
+import torch  # noqa: F401
+
+import argparse
 import sys
 from pathlib import Path
 

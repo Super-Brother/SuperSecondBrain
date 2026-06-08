@@ -60,8 +60,10 @@ def _get_tokenizer():
     global _tokenizer
     if _tokenizer is None:
         from transformers import AutoTokenizer
+        from src.utils.model_resolver import resolve_model_path
 
-        _tokenizer = AutoTokenizer.from_pretrained("BAAI/bge-large-zh-v1.5")
+        model_path = resolve_model_path("BAAI/bge-large-zh-v1.5")
+        _tokenizer = AutoTokenizer.from_pretrained(model_path)
     return _tokenizer
 
 
@@ -76,7 +78,8 @@ class EmbeddingCache:
     """句子级 Embedding，支持单 call 内去重缓存。"""
 
     def __init__(self, model_name: str = "BAAI/bge-large-zh-v1.5"):
-        self.model_name = model_name
+        from src.utils.model_resolver import resolve_model_path
+        self.model_name = resolve_model_path(model_name)
         self._model = None
         self._call_cache: dict[str, np.ndarray] = {}
 
@@ -85,7 +88,7 @@ class EmbeddingCache:
         if self._model is None:
             from sentence_transformers import SentenceTransformer
 
-            self._model = SentenceTransformer(self.model_name)
+            self._model = SentenceTransformer(self.model_name, device="cpu")
         return self._model
 
     def encode(self, sentences: list[str]) -> np.ndarray:

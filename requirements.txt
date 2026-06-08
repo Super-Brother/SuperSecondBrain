@@ -3,7 +3,10 @@ uvicorn>=0.44.0
 langchain>=1.2.0
 langchain-community>=0.4.0
 langchain-text-splitters>=1.1.0
-sentence-transformers>=5.4.0
+# Embedding + Reranker（注意：transformers/sentence-transformers/torch 必须版本兼容）
+torch>=2.1.0,<2.3.0
+transformers>=4.36.0,<4.43.0
+sentence-transformers>=3.0.0,<4.0.0
 faiss-cpu>=1.13.0
 rank-bm25>=0.2.2
 jieba>=0.42.1

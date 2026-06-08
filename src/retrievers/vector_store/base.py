@@ -47,12 +47,15 @@ class VectorStore(ABC):
         if self._embedder is None:
             from sentence_transformers import SentenceTransformer
             import os
+            from src.utils.model_resolver import resolve_model_path
             model_name = os.getenv("EMBEDDING_MODEL", "BAAI/bge-large-zh-v1.5")
+            model_path = resolve_model_path(model_name)
             cache_dir = os.getenv("SENTENCE_TRANSFORMERS_HOME")
             kwargs = {}
             if cache_dir:
                 kwargs["cache_folder"] = cache_dir
-            self._embedder = SentenceTransformer(model_name, **kwargs)
+            kwargs.setdefault("device", "cpu")
+            self._embedder = SentenceTransformer(model_path, **kwargs)
         return self._embedder
 
     @abstractmethod

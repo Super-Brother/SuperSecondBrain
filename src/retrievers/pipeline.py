@@ -32,6 +32,8 @@ class PipelineConfig:
     index_dir: str = "data/index"
     chunk_size: int = 512
     chunk_overlap: int = 100
+    # 模型路径：优先本地 models/ 目录，不存在时自动从 HuggingFace 下载
+    # 可通过环境变量 EMBEDDING_MODEL / RERANKER_MODEL 覆盖
     embedding_model: str = "BAAI/bge-large-zh-v1.5"
     reranker_model: str = "BAAI/bge-reranker-base"
     # LLM 配置
