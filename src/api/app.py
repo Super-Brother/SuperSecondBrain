@@ -46,6 +46,7 @@ from slowapi.errors import RateLimitExceeded
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from src.retrievers.pipeline import SecondBrainPipeline, PipelineConfig
+from src.retrievers.rag_retriever import SearchConfig
 from src.models.conversation import ConversationManager
 from src.utils.logger import log
 from src.utils.cache import ResponseCache
@@ -328,11 +329,36 @@ def _get_history(session_id: str | None) -> list[dict] | None:
     return history
 
 
-def _save_turn(session_id: str, query: str, answer: str):
+def _save_turn(session_id: str, query: str, answer: str, sources: list[dict] | None = None):
     if not session_id or conv_manager is None:
         return
     conv_manager.add_message(session_id, "user", query)
-    conv_manager.add_message(session_id, "assistant", answer)
+    metadata = {"sources": sources} if sources else None
+    conv_manager.add_message(session_id, "assistant", answer, metadata=metadata)
+
+
+def _sources_for_query(query: str) -> list[dict]:
+    if not query or pipeline is None or pipeline.rag_retriever is None:
+        return []
+    try:
+        config = SearchConfig(
+            top_k=pipeline.config.default_top_k,
+            rerank_top_k=pipeline.config.default_rerank_top_k,
+            bm25_weight=pipeline.config.bm25_weight,
+            vector_weight=pipeline.config.vector_weight,
+        )
+        results = pipeline.rag_retriever.retrieve(query, config)
+    except Exception:
+        return []
+    return [
+        {
+            "title": doc.metadata.get("title", ""),
+            "source": doc.metadata.get("source_file", ""),
+            "domain": doc.metadata.get("domain", ""),
+            "score": round(score, 3),
+        }
+        for doc, score in results
+    ]
 
 
 # ---- API ----
@@ -390,12 +416,26 @@ async def get_session_messages(session_id: str):
     if conv_manager is None:
         return JSONResponse(status_code=503, content={"error": "服务未就绪"})
     messages = conv_manager.get_history(session_id, limit=100)
+    serialized = []
+    last_user_query = None
+    for m in messages:
+        sources = (m.metadata or {}).get("sources", [])
+        if m.role == "assistant" and not sources and last_user_query:
+            sources = _sources_for_query(last_user_query)
+        serialized.append(
+            {
+                "role": m.role,
+                "content": m.content,
+                "timestamp": m.timestamp,
+                "sources": sources,
+            }
+        )
+        if m.role == "user":
+            last_user_query = m.content
+
     return {
         "session_id": session_id,
-        "messages": [
-            {"role": m.role, "content": m.content, "timestamp": m.timestamp}
-            for m in messages
-        ],
+        "messages": serialized,
     }
 
 
@@ -416,7 +456,7 @@ async def chat(request: Request, body: ChatRequest):
     cached = response_cache.get(body.query, body.domain) if response_cache else None
     if cached:
         log.info("缓存命中: %s", body.query[:30])
-        _save_turn(session_id, body.query, cached["answer"])
+        _save_turn(session_id, body.query, cached["answer"], cached.get("sources"))
         return ChatResponse(**cached, session_id=session_id)
 
     history = _get_history(session_id)
@@ -427,7 +467,7 @@ async def chat(request: Request, body: ChatRequest):
         history=history,
     )
 
-    _save_turn(session_id, body.query, result["answer"])
+    _save_turn(session_id, body.query, result["answer"], result.get("sources"))
 
     # 写缓存
     if response_cache:
@@ -465,6 +505,7 @@ async def chat_stream(request: Request, body: ChatRequest):
 
     async def generate():
         full_answer = ""
+        sources = []
         async for chunk in pipeline.chat_stream(
             query=body.query,
             domain=body.domain,
@@ -473,13 +514,14 @@ async def chat_stream(request: Request, body: ChatRequest):
         ):
             if chunk.startswith("__SOURCES__:"):
                 sources_json = chunk.replace("__SOURCES__:", "").strip()
-                yield f"data: {json.dumps({'type': 'sources', 'data': json.loads(sources_json)}, ensure_ascii=False)}\n\n"
+                sources = json.loads(sources_json)
+                yield f"data: {json.dumps({'type': 'sources', 'data': sources}, ensure_ascii=False)}\n\n"
             else:
                 full_answer += chunk
                 yield f"data: {json.dumps({'type': 'answer', 'content': chunk}, ensure_ascii=False)}\n\n"
 
         yield f"data: {json.dumps({'type': 'done', 'session_id': session_id}, ensure_ascii=False)}\n\n"
-        _save_turn(session_id, body.query, full_answer)
+        _save_turn(session_id, body.query, full_answer, sources)
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 

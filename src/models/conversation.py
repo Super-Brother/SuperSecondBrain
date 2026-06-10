@@ -4,6 +4,7 @@ import sqlite3
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
+import json
 from pathlib import Path
 from typing import Optional
 
@@ -13,6 +14,7 @@ class Message:
     role: str  # "user" | "assistant" | "system"
     content: str
     timestamp: str
+    metadata: dict | None = None
 
 
 class ConversationManager:
@@ -34,11 +36,19 @@ class ConversationManager:
                 session_id TEXT NOT NULL,
                 role TEXT NOT NULL,
                 content TEXT NOT NULL,
+                metadata TEXT,
                 timestamp TEXT NOT NULL,
                 FOREIGN KEY (session_id) REFERENCES sessions(session_id)
             );
             CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
         """)
+        columns = {
+            row["name"]
+            for row in self.conn.execute("PRAGMA table_info(messages)").fetchall()
+        }
+        if "metadata" not in columns:
+            self.conn.execute("ALTER TABLE messages ADD COLUMN metadata TEXT")
+            self.conn.commit()
 
     def create_session(self) -> str:
         session_id = str(uuid.uuid4())
@@ -50,11 +60,12 @@ class ConversationManager:
         self.conn.commit()
         return session_id
 
-    def add_message(self, session_id: str, role: str, content: str):
+    def add_message(self, session_id: str, role: str, content: str, metadata: Optional[dict] = None):
         now = datetime.now().isoformat()
+        metadata_json = json.dumps(metadata, ensure_ascii=False) if metadata else None
         self.conn.execute(
-            "INSERT INTO messages (session_id, role, content, timestamp) VALUES (?, ?, ?, ?)",
-            (session_id, role, content, now),
+            "INSERT INTO messages (session_id, role, content, metadata, timestamp) VALUES (?, ?, ?, ?, ?)",
+            (session_id, role, content, metadata_json, now),
         )
         self.conn.execute(
             "UPDATE sessions SET updated_at = ? WHERE session_id = ?",
@@ -64,11 +75,11 @@ class ConversationManager:
 
     def get_history(self, session_id: str, limit: int = 20) -> list[Message]:
         rows = self.conn.execute(
-            "SELECT role, content, timestamp FROM messages "
+            "SELECT role, content, metadata, timestamp FROM messages "
             "WHERE session_id = ? ORDER BY timestamp DESC LIMIT ?",
             (session_id, limit),
         ).fetchall()
-        return [Message(role=r["role"], content=r["content"], timestamp=r["timestamp"]) for r in reversed(rows)]
+        return [self._row_to_message(r) for r in reversed(rows)]
 
     def delete_session(self, session_id: str):
         self.conn.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
@@ -97,8 +108,22 @@ class ConversationManager:
 
     def get_history_slice(self, session_id: str, offset: int = 0, limit: int = 20) -> list[Message]:
         rows = self.conn.execute(
-            "SELECT role, content, timestamp FROM messages "
+            "SELECT role, content, metadata, timestamp FROM messages "
             "WHERE session_id = ? ORDER BY timestamp ASC LIMIT ? OFFSET ?",
             (session_id, limit, offset),
         ).fetchall()
-        return [Message(role=r["role"], content=r["content"], timestamp=r["timestamp"]) for r in rows]
+        return [self._row_to_message(r) for r in rows]
+
+    def _row_to_message(self, row: sqlite3.Row) -> Message:
+        metadata = None
+        if row["metadata"]:
+            try:
+                metadata = json.loads(row["metadata"])
+            except json.JSONDecodeError:
+                metadata = None
+        return Message(
+            role=row["role"],
+            content=row["content"],
+            timestamp=row["timestamp"],
+            metadata=metadata,
+        )

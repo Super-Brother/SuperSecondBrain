@@ -2,6 +2,7 @@
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 
 import pytest
@@ -59,6 +60,76 @@ class TestSessionEndpoints:
     def test_delete_session(self, client):
         r = client.delete("/api/v1/sessions/test-session-id")
         assert r.status_code == 200
+
+    def test_get_session_messages_includes_sources(self, client, monkeypatch):
+        from src.api import app as app_module
+
+        sources = [{"title": "快速学习", "source": "/vault/快速学习.md", "score": 0.8}]
+        mock_conv = MagicMock()
+        mock_conv.get_history.return_value = [
+            SimpleNamespace(
+                role="assistant",
+                content="回答内容",
+                timestamp="2026-06-09T10:00:00",
+                metadata={"sources": sources},
+            )
+        ]
+        monkeypatch.setattr(app_module, "conv_manager", mock_conv)
+
+        r = client.get("/api/v1/sessions/test-session-id/messages")
+
+        assert r.status_code == 200
+        assert r.json()["messages"][0]["sources"] == sources
+
+    def test_get_session_messages_backfills_missing_sources(self, client, monkeypatch):
+        from src.api import app as app_module
+
+        mock_conv = MagicMock()
+        mock_conv.get_history.return_value = [
+            SimpleNamespace(
+                role="user",
+                content="如何快速学习新知识",
+                timestamp="2026-06-09T10:00:00",
+                metadata=None,
+            ),
+            SimpleNamespace(
+                role="assistant",
+                content="回答内容",
+                timestamp="2026-06-09T10:00:01",
+                metadata=None,
+            ),
+        ]
+        mock_pipeline = MagicMock()
+        mock_pipeline.config.default_top_k = 5
+        mock_pipeline.config.default_rerank_top_k = 10
+        mock_pipeline.config.bm25_weight = 0.3
+        mock_pipeline.config.vector_weight = 0.7
+        mock_pipeline.rag_retriever.retrieve.return_value = [
+            (
+                SimpleNamespace(
+                    metadata={
+                        "title": "快速学习",
+                        "source_file": "/vault/快速学习.md",
+                        "domain": "通识",
+                    }
+                ),
+                0.8123,
+            )
+        ]
+        monkeypatch.setattr(app_module, "conv_manager", mock_conv)
+        monkeypatch.setattr(app_module, "pipeline", mock_pipeline)
+
+        r = client.get("/api/v1/sessions/test-session-id/messages")
+
+        assert r.status_code == 200
+        assert r.json()["messages"][1]["sources"] == [
+            {
+                "title": "快速学习",
+                "source": "/vault/快速学习.md",
+                "domain": "通识",
+                "score": 0.812,
+            }
+        ]
 
 
 class TestChatEndpoint:

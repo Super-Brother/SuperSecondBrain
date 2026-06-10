@@ -150,7 +150,7 @@ body {{ font-family: 'Inter', sans-serif; -webkit-tap-highlight-color: transpare
         </nav>
 
         <!-- 消息区域 -->
-        <div id="messages" class="flex-1 overflow-y-auto p-4 md:p-6 space-y-6 scrollbar-hide pb-32">
+        <div id="messages" class="flex-1 overflow-y-auto p-4 md:p-6 space-y-6 scrollbar-hide pb-4">
             <!-- 欢迎消息 -->
             <div class="max-w-2xl mx-auto flex flex-col gap-3">
                 <div class="flex items-center gap-2">
@@ -166,7 +166,7 @@ body {{ font-family: 'Inter', sans-serif; -webkit-tap-highlight-color: transpare
         </div>
 
         <!-- 底部输入栏 -->
-        <div class="absolute bottom-0 left-0 right-0 p-3 md:p-4 bg-gradient-to-t from-surface via-surface/95 to-transparent">
+        <div class="shrink-0 p-3 md:p-4 bg-surface border-t border-white/5">
             <div class="max-w-2xl mx-auto">
                 <div class="bg-surface-container-high rounded-xl flex items-end p-1.5 gap-2 border border-white/5">
                     <textarea id="query" class="flex-1 bg-transparent border-none focus:ring-0 text-on-surface py-2.5 px-3 resize-none placeholder-on-surface/40 text-sm max-h-[120px]" placeholder="输入你的问题..." rows="1"></textarea>
@@ -579,23 +579,10 @@ async function loadSession(sessionId) {{
                     `;
                     messagesDiv.appendChild(wrapper);
                 }} else if (msg.role === 'assistant') {{
-                    const wrapper = document.createElement('div');
-                    wrapper.className = 'max-w-2xl mx-auto flex flex-col gap-2';
-                    wrapper.innerHTML = `
-                        <div class="flex items-center gap-2">
-                            <div class="w-7 h-7 rounded-full bg-primary-container flex items-center justify-center">
-                                <span class="material-symbols-outlined text-xs text-white">psychology</span>
-                            </div>
-                            <span class="text-xs font-medium text-on-surface/50">AI Assistant</span>
-                        </div>
-                        <div class="bg-surface-container-low px-4 py-3 rounded-xl text-on-surface leading-relaxed border-l-2 border-primary/30 whitespace-pre-wrap text-sm">
-                            ${{escapeHtml(msg.content)}}
-                        </div>
-                    `;
-                    messagesDiv.appendChild(wrapper);
+                    addMessage('assistant', msg.content, msg.sources || [], {{ showCursor: false, animated: false }});
                 }}
             }}
-            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            scrollMessagesToBottom();
         }}
     }} catch(e) {{
         // 加载失败时显示欢迎消息
@@ -788,6 +775,15 @@ const messagesDiv = document.getElementById('messages');
 const queryInput = document.getElementById('query');
 const sendBtn = document.getElementById('sendBtn');
 
+function scrollMessagesToBottom() {{
+    requestAnimationFrame(() => {{
+        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        requestAnimationFrame(() => {{
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }});
+    }});
+}}
+
 queryInput.addEventListener('input', function() {{
     this.style.height = 'auto';
     this.style.height = Math.min(this.scrollHeight, 120) + 'px';
@@ -805,9 +801,31 @@ function escapeHtml(text) {{
     return div.innerHTML;
 }}
 
-function addMessage(role, content, sources = null) {{
+function renderSources(sources) {{
+    if (!sources || sources.length === 0) return '';
+    const filtered = sources.filter(s => (s.score || 0) >= 0.2);
+    if (filtered.length === 0) return '';
+
+    let sourcesHtml = '<div class="flex flex-wrap gap-2 mt-2">';
+    filtered.forEach(s => {{
+        const title = escapeHtml((s.title || '未知').substring(0, 30));
+        const score = ((s.score || 0) * 100).toFixed(0);
+        const source = s.source || '';
+        if (source && source.includes('{VAULT_NAME}')) {{
+            const relPath = source.split('{VAULT_NAME}/')[1];
+            const obsUrl = `obsidian://open?vault=${{encodeURIComponent('{VAULT_NAME}')}}&file=${{encodeURIComponent(relPath)}}`;
+            sourcesHtml += `<a href="${{obsUrl}}" target="_blank" class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-primary/10 text-primary text-xs hover:bg-primary/20 transition-colors"><span class="material-symbols-outlined text-sm">link</span>${{title}} <span class="opacity-60">${{score}}%</span></a>`;
+        }} else {{
+            sourcesHtml += `<span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/5 text-on-surface/70 text-xs">${{title}} <span class="opacity-60">${{score}}%</span></span>`;
+        }}
+    }});
+    sourcesHtml += '</div>';
+    return sourcesHtml;
+}}
+
+function addMessage(role, content, sources = null, options = {{}}) {{
     const wrapper = document.createElement('div');
-    wrapper.className = 'max-w-2xl mx-auto flex flex-col gap-2 msg-bubble';
+    wrapper.className = 'max-w-2xl mx-auto flex flex-col gap-2' + (options.animated === false ? '' : ' msg-bubble');
 
     if (role === 'user') {{
         wrapper.innerHTML = `
@@ -821,26 +839,7 @@ function addMessage(role, content, sources = null) {{
             </div>
         `;
     }} else {{
-        let sourcesHtml = '';
-        if (sources && sources.length > 0) {{
-            const filtered = sources.filter(s => (s.score || 0) >= 0.2);
-            if (filtered.length > 0) {{
-                sourcesHtml = '<div class="flex flex-wrap gap-2 mt-2">';
-                filtered.forEach(s => {{
-                    const title = (s.title || '未知').substring(0, 30);
-                    const score = ((s.score || 0) * 100).toFixed(0);
-                    const source = s.source || '';
-                    if (source && source.includes('{VAULT_NAME}')) {{
-                        const relPath = source.split('{VAULT_NAME}/')[1];
-                        const obsUrl = `obsidian://open?vault=${{encodeURIComponent('{VAULT_NAME}')}}&file=${{encodeURIComponent(relPath)}}`;
-                        sourcesHtml += `<a href="${{obsUrl}}" target="_blank" class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-primary/10 text-primary text-xs hover:bg-primary/20 transition-colors"><span class="material-symbols-outlined text-sm">link</span>${{title}} <span class="opacity-60">${{score}}%</span></a>`;
-                    }} else {{
-                        sourcesHtml += `<span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/5 text-on-surface/70 text-xs">${{title}} <span class="opacity-60">${{score}}%</span></span>`;
-                    }}
-                }});
-                sourcesHtml += '</div>';
-            }}
-        }}
+        const cursorHtml = options.showCursor === false ? '' : '<span id="cursor" class="cursor-blink text-primary">▌</span>';
 
         wrapper.innerHTML = `
             <div class="flex items-center gap-2">
@@ -850,14 +849,14 @@ function addMessage(role, content, sources = null) {{
                 <span class="text-xs font-medium text-on-surface/50">AI Assistant</span>
             </div>
             <div class="bg-surface-container-low px-4 py-3 rounded-xl text-on-surface leading-relaxed border-l-2 border-primary/30 whitespace-pre-wrap text-sm">
-                ${{content}}<span id="cursor" class="cursor-blink text-primary">▌</span>
+                ${{escapeHtml(content)}}${{cursorHtml}}
             </div>
-            ${{sourcesHtml}}
+            ${{renderSources(sources)}}
         `;
     }}
 
     messagesDiv.appendChild(wrapper);
-    messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    scrollMessagesToBottom();
     return wrapper;
 }}
 
@@ -922,7 +921,7 @@ async function send() {{
                             if (contentDiv) {{
                                 contentDiv.innerHTML = escapeHtml(fullAnswer) + '<span id="cursor" class="cursor-blink text-primary">▌</span>';
                             }}
-                            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+                            scrollMessagesToBottom();
                         }} else if (data.type === 'sources') {{
                             sources = data.data;
                         }} else if (data.type === 'done') {{
@@ -934,30 +933,15 @@ async function send() {{
             }}
         }}
 
-        // 添加来源
-        const filtered = sources.filter(s => (s.score || 0) >= 0.2);
-        if (filtered.length > 0) {{
-            let sourcesHtml = '<div class="flex flex-wrap gap-2 mt-2">';
-            filtered.forEach(s => {{
-                const title = (s.title || '未知').substring(0, 30);
-                const score = ((s.score || 0) * 100).toFixed(0);
-                const source = s.source || '';
-                if (source && source.includes('{VAULT_NAME}')) {{
-                    const relPath = source.split('{VAULT_NAME}/')[1];
-                    const obsUrl = `obsidian://open?vault=${{encodeURIComponent('{VAULT_NAME}')}}&file=${{encodeURIComponent(relPath)}}`;
-                    sourcesHtml += `<a href="${{obsUrl}}" target="_blank" class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-primary/10 text-primary text-xs hover:bg-primary/20 transition-colors"><span class="material-symbols-outlined text-sm">link</span>${{title}} <span class="opacity-60">${{score}}%</span></a>`;
-                }} else {{
-                    sourcesHtml += `<span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/5 text-on-surface/70 text-xs">${{title}} <span class="opacity-60">${{score}}%</span></span>`;
-                }}
-            }});
-            sourcesHtml += '</div>';
+        const sourcesHtml = renderSources(sources);
+        if (sourcesHtml) {{
             wrapper.insertAdjacentHTML('beforeend', sourcesHtml);
         }}
 
         await loadSessions();
 
     }} catch(e) {{
-        addMessage('assistant', '❌ 请求失败: ' + e.message);
+        addMessage('assistant', '❌ 请求失败: ' + e.message, null, {{ showCursor: false }});
     }}
 
     sendBtn.disabled = false;
