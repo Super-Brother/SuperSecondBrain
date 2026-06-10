@@ -79,6 +79,64 @@ body {{ font-family: 'Inter', sans-serif; -webkit-tap-highlight-color: transpare
 .prose th {{ background: rgba(255,255,255,0.05); }}
 .note-card {{ transition: all 0.2s ease; }}
 .note-card:hover {{ background: rgba(255,255,255,0.04); }}
+/* 文件夹树形结构 */
+.folder-tree-node {{ user-select: none; }}
+.folder-tree-row {{
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: 3px 4px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background-color 0.15s;
+    min-height: 28px;
+}}
+.folder-tree-row:hover {{ background-color: rgba(255,255,255,0.05); }}
+.folder-tree-selected {{
+    background-color: rgba(255,255,255,0.08);
+    color: #e2e4e9;
+}}
+.folder-tree-expand-icon {{
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    font-size: 14px;
+    color: rgba(255,255,255,0.35);
+    cursor: pointer;
+    border-radius: 3px;
+    font-family: 'Material Symbols Outlined';
+    flex-shrink: 0;
+}}
+.folder-tree-expand-icon:hover {{
+    background-color: rgba(255,255,255,0.08);
+    color: rgba(255,255,255,0.6);
+}}
+.folder-tree-folder-icon {{
+    font-size: 16px;
+    color: rgba(255,255,255,0.45);
+    font-family: 'Material Symbols Outlined';
+    flex-shrink: 0;
+}}
+.folder-tree-selected .folder-tree-folder-icon {{ color: rgba(255,255,255,0.7); }}
+.folder-tree-label {{
+    font-size: 12px;
+    color: rgba(255,255,255,0.55);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: 1;
+    margin-left: 2px;
+}}
+.folder-tree-selected .folder-tree-label {{
+    color: #e2e4e9;
+    font-weight: 500;
+}}
+.folder-tree-expand-icon.invisible {{
+    visibility: hidden;
+    pointer-events: none;
+}}
 </style>
 </head>
 <body class="bg-surface text-on-surface h-screen overflow-hidden">
@@ -235,7 +293,7 @@ body {{ font-family: 'Inter', sans-serif; -webkit-tap-highlight-color: transpare
                         </div>
                         <div>
                             <div class="text-[10px] font-bold text-on-surface/40 uppercase tracking-wider mb-2">文件夹</div>
-                            <div id="notesFolderFilters" class="space-y-1 max-h-48 overflow-y-auto scrollbar-hide"></div>
+                            <div id="notesFolderFilters" class="space-y-1 max-h-80 overflow-y-auto scrollbar-hide"></div>
                         </div>
                         <div>
                             <div class="text-[10px] font-bold text-on-surface/40 uppercase tracking-wider mb-2">标签</div>
@@ -1121,6 +1179,68 @@ let notesState = {{
     isEditing: false,
 }};
 
+// 文件夹树形展开状态
+let folderTreeState = {{
+    expanded: new Set(),
+}};
+
+function buildFolderTree(folders) {{
+    const root = [];
+    for (const path of folders.sort()) {{
+        const parts = path.split('/');
+        let current = root;
+        let builtPath = '';
+        for (let i = 0; i < parts.length; i++) {{
+            const part = parts[i];
+            builtPath = builtPath ? builtPath + '/' + part : part;
+            let node = current.find(n => n.name === part);
+            if (!node) {{
+                node = {{ name: part, path: builtPath, children: [] }};
+                current.push(node);
+            }}
+            current = node.children;
+        }}
+    }}
+    return root;
+}}
+
+function toggleFolderExpand(path) {{
+    if (folderTreeState.expanded.has(path)) {{
+        folderTreeState.expanded.delete(path);
+    }} else {{
+        folderTreeState.expanded.add(path);
+    }}
+    loadNotesFilters();
+}}
+
+function renderFolderTree(nodes, level = 0) {{
+    if (!nodes || !nodes.length) return '';
+    return nodes.map(node => {{
+        const hasChildren = node.children.length > 0;
+        const isExpanded = folderTreeState.expanded.has(node.path);
+        const isSelected = notesState.folder === node.path;
+        const indent = level * 16;
+
+        const expandIcon = hasChildren
+            ? (isExpanded ? 'expand_more' : 'chevron_right')
+            : '';
+        const folderIcon = isExpanded ? 'folder_open' : 'folder';
+
+        let html = '<div class="folder-tree-node">';
+        html += '<div class="folder-tree-row ' + (isSelected ? 'folder-tree-selected' : '') + '" style="padding-left: ' + indent + 'px">';
+        html += '<span class="folder-tree-expand-icon ' + (expandIcon ? '' : 'invisible') + '" onclick="event.stopPropagation(); toggleFolderExpand(&#39;' + node.path + '&#39;)">' + expandIcon + '</span>';
+        html += '<span class="folder-tree-folder-icon material-symbols-outlined">' + folderIcon + '</span>';
+        html += '<span class="folder-tree-label" onclick="filterNotesByFolder(&#39;' + node.path + '&#39;)">' + escapeHtml(node.name) + '</span>';
+        html += '</div>';
+
+        if (hasChildren && isExpanded) {{
+            html += renderFolderTree(node.children, level + 1);
+        }}
+        html += '</div>';
+        return html;
+    }}).join('');
+}}
+
 function showNotesView() {{
     document.getElementById('chatView').classList.add('hidden');
     document.getElementById('notesView').classList.remove('hidden');
@@ -1230,15 +1350,12 @@ async function loadNotesFilters() {{
             </button>
         `).join('');
 
-        // 文件夹
+        // 文件夹 — 树形结构
         const folderResp = await fetch('/api/v1/folders', {{ headers }});
         const folderData = await folderResp.json();
         const folderDiv = document.getElementById('notesFolderFilters');
-        folderDiv.innerHTML = (folderData.folders || []).map(f => `
-            <button onclick="filterNotesByFolder('${{f}}')" class="w-full text-left px-2 py-1 rounded-lg text-xs text-on-surface/60 hover:bg-white/5 hover:text-on-surface transition-colors truncate ${{notesState.folder === f ? 'bg-white/5 text-on-surface' : ''}}">
-                ${{escapeHtml(f)}}
-            </button>
-        `).join('');
+        const tree = buildFolderTree(folderData.folders || []);
+        folderDiv.innerHTML = renderFolderTree(tree);
 
         // 标签
         const tagResp = await fetch('/api/v1/tags?with_count=true', {{ headers }});
