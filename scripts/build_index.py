@@ -29,6 +29,7 @@ from src.retrievers.pipeline import SecondBrainPipeline, PipelineConfig
 def main():
     parser = argparse.ArgumentParser(description="构建/更新知识库索引")
     parser.add_argument("--incremental", action="store_true", help="增量模式：只处理变更文件")
+    parser.add_argument("--versioned", action="store_true", help="版本化模式：创建新版本并自动切换（保留旧版本支持回滚）")
     args = parser.parse_args()
 
     vault_path = os.getenv(
@@ -42,6 +43,7 @@ def main():
         index_dir=index_dir,
         chunk_size=512,
         chunk_overlap=100,
+        versioned=args.versioned,
     )
 
     pipeline = SecondBrainPipeline(config)

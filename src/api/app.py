@@ -543,6 +543,77 @@ async def list_domains():
     return {"domains": pipeline.get_stats().get("domain_distribution", {})}
 
 
+# ---- 索引版本管理 ----
+
+@app.get("/api/v1/index/versions")
+async def list_index_versions():
+    """列出所有索引版本"""
+    if pipeline is None:
+        return {"error": "服务未就绪"}
+    try:
+        versions = pipeline.version_manager.list_versions()
+        stats = pipeline.version_manager.get_stats()
+        return {
+            "current_version": stats["current_version"],
+            "total_versions": stats["total_versions"],
+            "max_versions": stats["max_versions"],
+            "versions": versions,
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+class SwitchVersionRequest(BaseModel):
+    version_id: str
+
+
+@app.post("/api/v1/index/switch")
+async def switch_index_version(request: Request, body: SwitchVersionRequest):
+    """切换到指定索引版本（原子切换，服务不中断）"""
+    if pipeline is None:
+        return JSONResponse(status_code=503, content={"error": "服务未就绪"})
+    try:
+        result = pipeline.version_manager.switch_version(body.version_id)
+        # 重新加载索引
+        pipeline.load_index()
+        audit_log(
+            AuditAction.MODEL_SWITCH,  # 复用 model_switch 动作，或新增 INDEX_SWITCH
+            request,
+            details={"version_id": body.version_id, "previous": result.get("previous")},
+            status="success",
+        )
+        return {
+            "status": "ok",
+            "version_id": body.version_id,
+            "previous": result.get("previous"),
+        }
+    except Exception as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+
+
+@app.post("/api/v1/index/rollback")
+async def rollback_index_version(request: Request):
+    """回滚到上一个索引版本"""
+    if pipeline is None:
+        return JSONResponse(status_code=503, content={"error": "服务未就绪"})
+    try:
+        result = pipeline.version_manager.rollback()
+        pipeline.load_index()
+        audit_log(
+            AuditAction.MODEL_SWITCH,
+            request,
+            details={"version_id": result["version"], "action": "rollback"},
+            status="success",
+        )
+        return {
+            "status": "ok",
+            "version_id": result["version"],
+            "previous": result.get("previous"),
+        }
+    except Exception as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+
+
 @app.post("/api/v1/feedback")
 async def submit_feedback(request: Request, body: FeedbackRequest):
     log.info("反馈: session=%s rating=%d query=%s", body.session_id, body.rating, body.query[:30])

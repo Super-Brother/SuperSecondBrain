@@ -23,6 +23,7 @@ from src.retrievers.rag_retriever import (
 )
 from src.models.llm_generator import LLMGenerator, LLMConfig
 from src.retrievers.query_rewriter import QueryRewriter
+from src.utils.index_version import IndexVersionManager
 
 
 @dataclass
@@ -47,6 +48,8 @@ class PipelineConfig:
     bm25_weight: float = 0.3
     vector_weight: float = 0.7
     enable_query_rewrite: bool = False
+    # 索引版本管理
+    versioned: bool = False  # 是否启用版本化索引（自动多版本+灰度切换）
 
 
 class SecondBrainPipeline:
@@ -61,6 +64,8 @@ class SecondBrainPipeline:
         self.llm_generator = None
         self.query_rewriter = None
         self._stats = {}
+        # 索引版本管理器（可选启用，默认兼容旧版无版本化模式）
+        self.version_manager = IndexVersionManager(self.config.index_dir)
 
     def build_index(self, vault_path: str = None, chunk_size: int = None, incremental: bool = False):
         """从 Obsidian vault 构建索引，支持增量模式"""
@@ -101,8 +106,6 @@ class SecondBrainPipeline:
         self.hybrid_retriever = HybridRetriever(self.vector_retriever, self.bm25_retriever)
         self.rag_retriever = RAGRetriever(self.hybrid_retriever)
 
-        self.save_index(self.config.index_dir)
-
         # 生成 manifest
         manifest = {}
         for doc in docs:
@@ -110,11 +113,18 @@ class SecondBrainPipeline:
             h = doc.metadata.get("content_hash", "")
             if rp and h:
                 manifest[rp] = h
-        manifest_path = os.path.join(self.config.index_dir, "manifest.json")
+
+        if self.config.versioned:
+            version_id = self.save_index_versioned()
+            manifest_path = os.path.join(str(self.version_manager.get_version_path(version_id)), "manifest.json")
+            print(f"✅ 索引构建完成，新版本: {version_id}")
+        else:
+            self.save_index(self.config.index_dir)
+            manifest_path = os.path.join(self.config.index_dir, "manifest.json")
+            print(f"✅ 索引构建完成，已保存到 {self.config.index_dir}")
+
         with open(manifest_path, "w") as f:
             json.dump(manifest, f, ensure_ascii=False, indent=2)
-
-        print(f"✅ 索引构建完成，已保存到 {self.config.index_dir}")
 
         return self._stats
 
@@ -170,8 +180,6 @@ class SecondBrainPipeline:
         self.hybrid_retriever = HybridRetriever(self.vector_retriever, self.bm25_retriever)
         self.rag_retriever = RAGRetriever(self.hybrid_retriever)
 
-        self.save_index(self.config.index_dir)
-
         # 更新 manifest
         new_manifest = {}
         for doc in all_docs:
@@ -179,23 +187,39 @@ class SecondBrainPipeline:
             h = doc.metadata.get("content_hash", "")
             if rp and h:
                 new_manifest[rp] = h
+
+        if self.config.versioned:
+            version_id = self.save_index_versioned()
+            manifest_path = os.path.join(str(self.version_manager.get_version_path(version_id)), "manifest.json")
+            print(f"✅ 增量索引完成，新版本: {version_id}（共 {len(all_docs)} chunks）")
+        else:
+            self.save_index(self.config.index_dir)
+            manifest_path = os.path.join(self.config.index_dir, "manifest.json")
+            print(f"✅ 增量索引完成（共 {len(all_docs)} chunks）")
+
         with open(manifest_path, "w") as f:
             json.dump(new_manifest, f, ensure_ascii=False, indent=2)
 
-        print(f"✅ 增量索引完成（共 {len(all_docs)} chunks）")
         return self._stats
 
     def load_index(self, index_dir: str = None):
-        """加载已构建的索引"""
-        index_dir = index_dir or self.config.index_dir
-        print(f"📂 加载索引: {index_dir}")
+        """加载已构建的索引（自动识别版本化管理）"""
+        if index_dir:
+            target_dir = index_dir
+        else:
+            # 优先使用版本管理器解析当前应加载的目录
+            target_dir = self.version_manager.get_current_index_dir()
+            current_version = self.version_manager.get_current_version()
+            if current_version and current_version != "__legacy__":
+                print(f"📂 加载索引版本: {current_version}")
+        print(f"📂 加载索引目录: {target_dir}")
 
         # 加载向量索引
         self.vector_retriever = VectorRetriever()
-        self.vector_retriever.load(index_dir)
+        self.vector_retriever.load(target_dir)
 
         # BM25 索引
-        bm25_path = os.path.join(index_dir, "bm25.pkl")
+        bm25_path = os.path.join(target_dir, "bm25.pkl")
         if os.path.exists(bm25_path):
             with open(bm25_path, "rb") as f:
                 self.bm25_retriever = pickle.load(f)
@@ -218,7 +242,7 @@ class SecondBrainPipeline:
         self.llm_generator = LLMGenerator(llm_config)
 
         # 加载统计
-        stats_path = os.path.join(index_dir, "stats.json")
+        stats_path = os.path.join(target_dir, "stats.json")
         if os.path.exists(stats_path):
             with open(stats_path, "r") as f:
                 self._stats = json.load(f)
@@ -390,7 +414,35 @@ class SecondBrainPipeline:
             yield chunk
 
     def save_index(self, index_dir: str):
-        """保存所有索引"""
+        """保存所有索引（向后兼容：直接保存到指定目录）"""
+        os.makedirs(index_dir, exist_ok=True)
+        self._save_index_to_dir(index_dir)
+
+    def save_index_versioned(self) -> str:
+        """版本化保存索引：创建新版本目录，保存后自动切换并清理旧版本
+
+        Returns:
+            新版本 ID
+        """
+        version_id = self.version_manager.create_version_dir()
+        version_dir = self.version_manager.get_version_path(version_id)
+        print(f"💾 保存索引到新版本: {version_id}")
+
+        self._save_index_to_dir(str(version_dir))
+
+        # 原子切换到新版本
+        result = self.version_manager.switch_version(version_id)
+        print(f"✅ 已切换至版本 {version_id}（上一版本: {result.get('previous') or '无'}）")
+
+        # 清理超出的旧版本
+        deleted = self.version_manager.cleanup_old_versions()
+        if deleted:
+            print(f"🧹 已清理旧版本: {', '.join(deleted)}")
+
+        return version_id
+
+    def _save_index_to_dir(self, index_dir: str):
+        """实际保存索引文件到指定目录"""
         os.makedirs(index_dir, exist_ok=True)
         self.vector_retriever.save(index_dir)
 
@@ -462,8 +514,6 @@ class SecondBrainPipeline:
         self.hybrid_retriever = HybridRetriever(self.vector_retriever, self.bm25_retriever)
         self.rag_retriever = RAGRetriever(self.hybrid_retriever)
 
-        self.save_index(self.config.index_dir)
-
         # 生成 manifest（全量）
         manifest = {}
         for doc in all_docs:
@@ -471,11 +521,18 @@ class SecondBrainPipeline:
             h = doc.metadata.get("content_hash", "")
             if rp and h:
                 manifest[rp] = h
-        manifest_path = os.path.join(self.config.index_dir, "manifest.json")
+
+        if self.config.versioned:
+            version_id = self.save_index_versioned()
+            manifest_path = os.path.join(str(self.version_manager.get_version_path(version_id)), "manifest.json")
+            print(f"✅ 多格式索引重建完成，新版本: {version_id}")
+        else:
+            self.save_index(self.config.index_dir)
+            manifest_path = os.path.join(self.config.index_dir, "manifest.json")
+            print(f"✅ 多格式索引重建完成，已保存到 {self.config.index_dir}")
+
         with open(manifest_path, "w") as f:
             json.dump(manifest, f, ensure_ascii=False, indent=2)
-
-        print(f"✅ 多格式索引重建完成，已保存到 {self.config.index_dir}")
         return self._stats
 
 
