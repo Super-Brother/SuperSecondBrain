@@ -67,12 +67,12 @@ docker-compose -f docker-compose.full.yml up -d
 2. ✅ **分布式缓存** — `RedisCache` 支持 TTL、键前缀、连接健康检查；Redis 故障自动回退到内存 `ResponseCache`
 3. ✅ **限流熔断** — slowapi 限流（Redis 存储后端）+ `CircuitBreaker` 三态熔断器 + LLM 调用超时（30s）
 4. ✅ **日志审计** — `Logger` 支持 RotatingFileHandler + JSON 结构化格式；`AuditLogger`（SQLite）覆盖 8 个关键操作；请求中间件增强（X-Request-ID、IP、User-Agent、Metrics）
+5. ✅ **用户认证体系** — `APIKeyMiddleware` 始终解析 `Authorization: Bearer <token>` 并注入 `request.state.user`；保持向后兼容（无 API_KEY 时允许匿名访问）；审计日志可正确关联用户身份
+6. ✅ **对话摘要熔断保护** — `summarize_conversation()` 已接入 `CircuitBreaker`
+7. ✅ **Metrics 持久化与告警** — `MetricsCollector` 计数器/Token 使用量持久化到 SQLite（重启自动恢复）；新增 Prometheus `/metrics` 端点；支持环境变量配置告警阈值（P95/P99 延迟、错误率），`/stats` 返回中包含 `alerts` 字段
 
 **已知缺口（按优先级排序）：**
-1. **用户认证体系** — 存在 Login/Register 端点和 `APIKeyMiddleware`，但 `request.state.user` 始终为空，审计日志无法关联真实用户身份
-2. **对话摘要熔断保护** — `summarize_conversation()` 直接调用 LLM，未接入 `CircuitBreaker`，LLM 不稳定时可能阻塞历史压缩流程
-3. **Metrics 持久化与告警** — `MetricsCollector` 纯内存存储，重启后丢失；缺少 Prometheus `/metrics` 导出端点和告警阈值配置
-4. **索引版本管理与灰度** — 全量重建索引风险高，无版本号、无新旧索引切换机制、无回滚能力
+1. **索引版本管理与灰度** — 全量重建索引风险高，无版本号、无新旧索引切换机制、无回滚能力
 
 ### 核心流水线 (src/retrievers/pipeline.py)
 
