@@ -1419,7 +1419,7 @@ function showNoteEditor() {{
     document.getElementById('editorNotePath').readOnly = false;
     document.getElementById('editorNoteTags').value = '';
     document.getElementById('editorNoteDate').value = '';
-    document.getElementById('editorNoteContent').value = '# 标题\n\n正文内容...\n';
+    document.getElementById('editorNoteContent').value = '# 标题\\n\\n正文内容...\\n';
     updateEditorPreview();
 }}
 
