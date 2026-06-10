@@ -396,6 +396,14 @@ async def get_stats():
     return stats
 
 
+@app.get("/metrics")
+async def prometheus_metrics():
+    """Prometheus 指标导出端点（text exposition format）"""
+    from fastapi.responses import PlainTextResponse
+    metrics = get_metrics()
+    return PlainTextResponse(content=metrics.to_prometheus(), media_type="text/plain")
+
+
 @app.post("/api/v1/sessions", response_model=SessionResponse)
 async def create_session():
     return SessionResponse(session_id=conv_manager.create_session())
