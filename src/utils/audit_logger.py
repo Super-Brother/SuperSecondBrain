@@ -31,6 +31,10 @@ class AuditAction(str, Enum):
     LOGIN = "login"
     REGISTER = "register"
     FEEDBACK = "feedback"
+    NOTE_CREATE = "note_create"
+    NOTE_UPDATE = "note_update"
+    NOTE_DELETE = "note_delete"
+    NOTE_SEARCH = "note_search"
 
 
 @dataclass

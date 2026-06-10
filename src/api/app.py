@@ -53,6 +53,7 @@ from src.utils.cache import ResponseCache
 from src.utils.redis_cache import RedisCache
 from src.api.auth import APIKeyMiddleware
 from src.api.static import HTML_TEMPLATE
+from src.api.notes_routes import router as notes_router
 from src.utils.vault_watcher import VaultWatcher
 from src.utils.model_config_store import (
     StoredModelConfig,
@@ -191,6 +192,9 @@ api_key = os.getenv("API_KEY", "")
 app.add_middleware(APIKeyMiddleware, api_key=api_key)
 if api_key:
     log.info("API Key 认证已启用")
+
+# 注册笔记管理路由
+app.include_router(notes_router, prefix="/api/v1")
 
 
 # ---- 请求计时中间件 ----

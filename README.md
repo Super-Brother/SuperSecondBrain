@@ -54,9 +54,11 @@ Prompt构建 → LLM生成 → 答案脱敏 → 答案+来源引用
 
 | 能力 | 状态 | 优先级 |
 |------|------|--------|
-| 用户认证体系 | ⚠️ | 高 — Login/Register 端点已存在，但 `request.state.user` 始终为空，审计日志无法关联真实用户 |
-| Metrics 持久化与告警 | ❌ | 高 — `MetricsCollector` 纯内存存储，重启丢失；缺少 Prometheus `/metrics` 导出端点和告警阈值配置 |
-| 索引版本管理与灰度 | ❌ | 中 — 全量重建索引风险高，无版本号、无新旧索引切换机制、无回滚能力 |
+| 用户认证体系 | ✅ | APIKeyMiddleware 解析 Bearer token 并注入 `request.state.user`，审计日志可关联用户身份 |
+| Metrics 持久化与告警 | ✅ | SQLite 持久化（重启不丢失）+ Prometheus `/metrics` 原生端点 + 环境变量告警阈值配置 |
+| 索引版本管理与灰度 | ✅ | `IndexVersionManager` 多版本索引并存、原子切换、自动清理旧版本、支持回滚 |
+| IM 集成（企微/飞书/钉钉） | ❌ | 中 — 仅 Web UI |
+| 对象存储（MinIO/Ceph） | ❌ | 低 — 直接读取本地文件系统 |
 | IM 集成（企微/飞书/钉钉） | ❌ | 中 — 仅 Web UI |
 | 对象存储（MinIO/Ceph） | ❌ | 低 — 直接读取本地文件系统 |
 
@@ -73,6 +75,7 @@ Prompt构建 → LLM生成 → 答案脱敏 → 答案+来源引用
 - **Rerank 重排序** — Cross-Encoder 精排，提升 Top-K 准确率
 - **响应缓存双后端** — 内存 LRU 缓存默认启用；配置 `REDIS_URL` 后自动升级为 Redis 分布式缓存，Redis 故障时自动降级回内存缓存
 - **限流熔断** — slowapi 限流（Redis 存储后端）+ `CircuitBreaker` 三态熔断器保护 LLM 调用，连续失败 5 次后自动熔断，60s 后半开探测
+- **索引版本管理** — 多版本索引并存（`data/index/versions/`），`build_index.py --versioned` 创建新版本并原子切换；保留最近 N 个版本自动清理；支持 `/api/v1/index/rollback` 回滚到上一版本
 - **Token 追踪** — 统计 LLM 用量
 - **日志审计** — RotatingFileHandler + JSON 结构化日志；SQLite 审计日志覆盖 chat/upload/sync/model_switch/login/register/feedback 8 类操作
 - **API Key 认证** — 可选的安全认证
@@ -83,7 +86,7 @@ Prompt构建 → LLM生成 → 答案脱敏 → 答案+来源引用
 - **权限隔离** — 部门 + 访问级别元数据过滤，检索时自动过滤无权文档
 - **数据脱敏** — Query / 文档 / 答案 三级脱敏，支持手机号、身份证、邮箱、银行卡
 - **自动化评估** — RAGAS 框架 + 启发式降级评估，持续监控 Faithfulness / Relevancy
-- **可观测性** — `MetricsCollector` 内存指标（P50/P95/P99 延迟、Token 用量、成功率）通过 `/stats` 端点暴露；Prometheus + Grafana 可视化
+- **可观测性** — `MetricsCollector` 收集 P50/P95/P99 延迟、Token 用量、成功率，SQLite 持久化（重启自动恢复）；原生 Prometheus `/metrics` 端点暴露；支持环境变量配置告警阈值（P95/P99 延迟、错误率），`/stats` 端点实时返回 `alerts` 告警状态；Grafana 可视化
 - **容器化部署** — Docker Compose 编排 FastAPI + Redis + Prometheus + Grafana（轻量）；或 FastAPI + Milvus + vLLM + Prometheus + Grafana（企业级）
 
 ## 技术栈
@@ -130,6 +133,9 @@ python scripts/build_index.py --incremental
 
 # 从多格式文档目录构建（企业级）
 python scripts/build_index.py --source-dir /path/to/docs --include-types .pdf .docx .md
+
+# 版本化构建（推荐生产环境）
+python scripts/build_index.py --versioned
 ```
 
 ### 4. 启动服务
@@ -183,7 +189,8 @@ results = rag_retriever.retrieve(query, config)
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | `/health` | 健康检查 |
-| GET | `/stats` | 知识库统计（含 Token 用量、P50/P95/P99 延迟） |
+| GET | `/stats` | 知识库统计（含 Token 用量、P50/P95/P99 延迟、实时告警状态） |
+| GET | `/metrics` | Prometheus 原生指标导出（延迟、Token、成功率、告警阈值） |
 | POST | `/api/v1/sessions` | 创建会话 |
 | GET | `/api/v1/sessions` | 列出会话 |
 | DELETE | `/api/v1/sessions/{id}` | 删除会话 |
@@ -203,6 +210,9 @@ results = rag_retriever.retrieve(query, config)
 | POST | `/api/v1/sync/trigger` | 手动触发索引同步 |
 | POST | `/api/v1/documents/upload` | 单文件上传 |
 | POST | `/api/v1/documents/batch-upload` | 批量文件上传 |
+| GET | `/api/v1/index/versions` | 列出所有索引版本 |
+| POST | `/api/v1/index/switch` | 原子切换到指定索引版本 |
+| POST | `/api/v1/index/rollback` | 回滚到上一索引版本 |
 
 ## 项目结构
 
@@ -234,8 +244,10 @@ secondbrain-chat/
 │   │   ├── redis_cache.py         # Redis 分布式缓存（自动降级回内存）
 │   │   ├── circuit_breaker.py     # 三态熔断器（CLOSED/OPEN/HALF_OPEN）
 │   │   ├── audit_logger.py        # 审计日志（SQLite 后端）
-│   │   ├── metrics.py             # 监控指标（延迟分位数 / Token / 成功率）
+│   │   ├── metrics.py             # 监控指标（SQLite 持久化 / Prometheus 导出 / 告警阈值）
+│   │   ├── index_version.py       # 索引版本管理器（多版本 / 原子切换 / 回滚）
 │   │   ├── model_config_store.py  # 模型配置持久化（JSON）
+│   │   ├── model_resolver.py      # 模型名解析与热切换
 │   │   ├── sanitizer.py           # 数据脱敏
 │   │   └── vault_watcher.py       # Vault 文件监控（自动同步）
 │   ├── evaluation/           # 评估

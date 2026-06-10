@@ -21,6 +21,7 @@ HTML_TEMPLATE = f'''<!DOCTYPE html>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet"/>
 <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <script>
 tailwind.config = {{
     darkMode: "class",
@@ -58,6 +59,26 @@ body {{ font-family: 'Inter', sans-serif; -webkit-tap-highlight-color: transpare
 @media (max-width: 768px) {{
     .mobile-full {{ width: 100vw !important; }}
 }}
+/* 笔记管理样式 */
+.prose {{ color: #e2e2e6; }}
+.prose h1, .prose h2, .prose h3, .prose h4 {{ color: #b8c3ff; margin-top: 1.5em; margin-bottom: 0.5em; font-weight: 600; }}
+.prose h1 {{ font-size: 1.5em; }}
+.prose h2 {{ font-size: 1.25em; }}
+.prose h3 {{ font-size: 1.1em; }}
+.prose p {{ margin-bottom: 0.75em; }}
+.prose ul, .prose ol {{ padding-left: 1.5em; margin-bottom: 0.75em; }}
+.prose li {{ margin-bottom: 0.25em; }}
+.prose code {{ background: rgba(255,255,255,0.08); padding: 0.15em 0.4em; border-radius: 4px; font-size: 0.9em; }}
+.prose pre {{ background: #1a1c1f; padding: 1em; border-radius: 8px; overflow-x: auto; margin-bottom: 0.75em; }}
+.prose pre code {{ background: none; padding: 0; }}
+.prose blockquote {{ border-left: 3px solid #2e5bff; padding-left: 1em; color: #e2e2e6aa; margin-bottom: 0.75em; }}
+.prose a {{ color: #b8c3ff; text-decoration: underline; }}
+.prose hr {{ border-color: rgba(255,255,255,0.1); margin: 1em 0; }}
+.prose table {{ width: 100%; border-collapse: collapse; margin-bottom: 0.75em; }}
+.prose th, .prose td {{ border: 1px solid rgba(255,255,255,0.1); padding: 0.5em; text-align: left; }}
+.prose th {{ background: rgba(255,255,255,0.05); }}
+.note-card {{ transition: all 0.2s ease; }}
+.note-card:hover {{ background: rgba(255,255,255,0.04); }}
 </style>
 </head>
 <body class="bg-surface text-on-surface h-screen overflow-hidden">
@@ -123,6 +144,10 @@ body {{ font-family: 'Inter', sans-serif; -webkit-tap-highlight-color: transpare
             <div class="text-xs text-on-surface/30 text-center py-8">加载中...</div>
         </div>
         <div class="p-4 border-t border-white/5">
+            <button onclick="showNotesView()" class="w-full flex items-center gap-2 text-sm text-on-surface/60 hover:text-on-surface transition-colors py-2 px-3 rounded-lg hover:bg-white/5">
+                <span class="material-symbols-outlined text-base">folder_open</span>
+                笔记管理
+            </button>
             <button onclick="openSettings()" class="w-full flex items-center gap-2 text-sm text-on-surface/60 hover:text-on-surface transition-colors py-2 px-3 rounded-lg hover:bg-white/5">
                 <span class="material-symbols-outlined text-base">settings</span>
                 设置
@@ -138,7 +163,7 @@ body {{ font-family: 'Inter', sans-serif; -webkit-tap-highlight-color: transpare
     <div id="historyOverlay" onclick="toggleHistoryDrawer()" class="fixed inset-0 bg-black/50 z-30 hidden md:hidden"></div>
 
     <!-- 中间聊天区域 -->
-    <main class="flex-1 flex flex-col h-full min-w-0 relative">
+    <main id="chatView" class="flex-1 flex flex-col h-full min-w-0 relative">
         <!-- 顶部导航 -->
         <nav class="bg-background/80 backdrop-blur-xl sticky top-0 z-20 flex items-center justify-between px-4 h-14 border-b border-white/5 shrink-0">
             <div class="flex items-center gap-3">
@@ -178,6 +203,140 @@ body {{ font-family: 'Inter', sans-serif; -webkit-tap-highlight-color: transpare
             </div>
         </div>
     </main>
+
+    <!-- ============ 笔记管理视图 ============ -->
+    <div id="notesView" class="hidden flex-1 flex flex-col h-full min-w-0 relative">
+        <!-- 顶部导航 -->
+        <nav class="bg-background/80 backdrop-blur-xl sticky top-0 z-20 flex items-center justify-between px-4 h-14 border-b border-white/5 shrink-0">
+            <div class="flex items-center gap-3">
+                <button onclick="showChatView()" class="material-symbols-outlined text-on-surface/60 hover:text-on-surface">arrow_back</button>
+                <span id="notesNavTitle" class="text-sm font-semibold truncate">笔记管理</span>
+            </div>
+            <div class="flex items-center gap-2">
+                <button id="newNoteBtn" onclick="showNoteEditor()" class="bg-primary-container text-white text-xs font-bold px-3 py-1.5 rounded-lg hover:bg-primary-container/80 transition-all flex items-center gap-1">
+                    <span class="material-symbols-outlined text-sm">add</span>新建
+                </button>
+            </div>
+        </nav>
+
+        <!-- 笔记管理内容区 -->
+        <div id="notesContent" class="flex-1 overflow-y-auto scrollbar-hide">
+            <!-- 笔记列表视图 -->
+            <div id="notesListView" class="h-full flex">
+                <!-- 左侧过滤栏 -->
+                <div class="w-60 h-full border-r border-white/5 bg-surface-container/40 flex flex-col hidden md:flex">
+                    <div class="p-3 border-b border-white/5">
+                        <input id="notesSearchInput" type="text" placeholder="搜索笔记..." onkeydown="if(event.key==='Enter')searchNotes()" class="w-full bg-surface-container-high border-none text-on-surface rounded-lg py-2 px-3 text-sm placeholder-on-surface/40">
+                    </div>
+                    <div class="flex-1 overflow-y-auto p-3 space-y-4 scrollbar-hide">
+                        <div>
+                            <div class="text-[10px] font-bold text-on-surface/40 uppercase tracking-wider mb-2">领域</div>
+                            <div id="notesDomainFilters" class="space-y-1"></div>
+                        </div>
+                        <div>
+                            <div class="text-[10px] font-bold text-on-surface/40 uppercase tracking-wider mb-2">文件夹</div>
+                            <div id="notesFolderFilters" class="space-y-1 max-h-48 overflow-y-auto scrollbar-hide"></div>
+                        </div>
+                        <div>
+                            <div class="text-[10px] font-bold text-on-surface/40 uppercase tracking-wider mb-2">标签</div>
+                            <div id="notesTagFilters" class="flex flex-wrap gap-1"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 右侧笔记列表 -->
+                <div class="flex-1 flex flex-col min-w-0">
+                    <div id="notesListHeader" class="p-3 border-b border-white/5 flex items-center justify-between">
+                        <span id="notesCount" class="text-xs text-on-surface/50">加载中...</span>
+                        <div class="flex items-center gap-2">
+                            <button onclick="refreshNotes()" class="material-symbols-outlined text-on-surface/40 hover:text-on-surface text-sm p-1">refresh</button>
+                        </div>
+                    </div>
+                    <div id="notesList" class="flex-1 overflow-y-auto p-3 space-y-2 scrollbar-hide">
+                        <div class="text-xs text-on-surface/30 text-center py-8">加载中...</div>
+                    </div>
+                    <!-- 分页 -->
+                    <div id="notesPagination" class="p-3 border-t border-white/5 flex items-center justify-center gap-2"></div>
+                </div>
+            </div>
+
+            <!-- 笔记详情视图 -->
+            <div id="noteDetailView" class="hidden h-full flex flex-col">
+                <div class="flex-1 overflow-y-auto p-4 md:p-8 scrollbar-hide">
+                    <div class="max-w-3xl mx-auto">
+                        <!-- 面包屑 -->
+                        <div id="noteBreadcrumb" class="text-xs text-on-surface/40 mb-4 flex items-center gap-1"></div>
+
+                        <!-- 元数据 -->
+                        <div class="flex flex-wrap items-center gap-2 mb-4">
+                            <span id="noteDomainBadge" class="px-2 py-0.5 rounded-full bg-primary/10 text-primary text-xs font-medium"></span>
+                            <span id="noteDate" class="text-xs text-on-surface/40"></span>
+                            <span id="noteWordCount" class="text-xs text-on-surface/40"></span>
+                        </div>
+
+                        <!-- 标签 -->
+                        <div id="noteTags" class="flex flex-wrap gap-1.5 mb-6"></div>
+
+                        <!-- 内容 -->
+                        <div id="noteContent" class="prose prose-invert max-w-none text-sm leading-relaxed"></div>
+
+                        <!-- 双向链接 -->
+                        <div id="noteOutboundLinks" class="mt-8 hidden">
+                            <div class="text-xs font-bold text-on-surface/50 mb-2">双向链接</div>
+                            <div id="noteOutboundLinksList" class="flex flex-wrap gap-2"></div>
+                        </div>
+
+                        <!-- 操作栏 -->
+                        <div class="mt-8 flex items-center gap-3">
+                            <button onclick="editCurrentNote()" class="bg-primary-container text-white text-xs font-bold px-4 py-2 rounded-lg hover:bg-primary-container/80 transition-all flex items-center gap-1">
+                                <span class="material-symbols-outlined text-sm">edit</span>编辑
+                            </button>
+                            <button onclick="downloadCurrentNote()" id="noteDownloadBtn" class="hidden bg-surface-container-high text-on-surface text-xs font-bold px-4 py-2 rounded-lg hover:bg-surface-container-highest transition-all flex items-center gap-1">
+                                <span class="material-symbols-outlined text-sm">download</span>下载
+                            </button>
+                            <button onclick="deleteCurrentNote()" class="bg-red-500/10 text-red-400 text-xs font-bold px-4 py-2 rounded-lg hover:bg-red-500/20 transition-all flex items-center gap-1">
+                                <span class="material-symbols-outlined text-sm">delete</span>删除
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 笔记编辑器视图 -->
+            <div id="noteEditorView" class="hidden h-full flex flex-col">
+                <div class="flex-1 overflow-y-auto p-4 md:p-6 scrollbar-hide">
+                    <div class="max-w-4xl mx-auto h-full flex flex-col">
+                        <!-- 编辑头部 -->
+                        <div class="flex items-center gap-3 mb-4">
+                            <input id="editorNotePath" type="text" placeholder="文件路径（如：未分类/新笔记.md）" class="flex-1 bg-surface-container-high border-none text-on-surface rounded-lg py-2 px-3 text-sm placeholder-on-surface/40">
+                        </div>
+                        <div class="flex items-center gap-3 mb-4">
+                            <input id="editorNoteTags" type="text" placeholder="标签（逗号分隔）" class="flex-1 bg-surface-container-high border-none text-on-surface rounded-lg py-2 px-3 text-sm placeholder-on-surface/40">
+                            <input id="editorNoteDate" type="date" class="bg-surface-container-high border-none text-on-surface rounded-lg py-2 px-3 text-sm">
+                        </div>
+
+                        <!-- 编辑区 -->
+                        <div class="flex-1 flex gap-4 min-h-0">
+                            <div class="flex-1 flex flex-col min-w-0">
+                                <div class="text-[10px] font-bold text-on-surface/40 uppercase tracking-wider mb-1">Markdown</div>
+                                <textarea id="editorNoteContent" class="flex-1 w-full bg-surface-container-high border-none text-on-surface rounded-lg p-3 text-sm resize-none font-mono leading-relaxed placeholder-on-surface/40" placeholder="在此输入 Markdown 内容..."></textarea>
+                            </div>
+                            <div class="flex-1 flex flex-col min-w-0 hidden md:flex">
+                                <div class="text-[10px] font-bold text-on-surface/40 uppercase tracking-wider mb-1">预览</div>
+                                <div id="editorNotePreview" class="flex-1 w-full bg-surface-container-high border-none text-on-surface rounded-lg p-3 text-sm overflow-y-auto scrollbar-hide"></div>
+                            </div>
+                        </div>
+
+                        <!-- 操作栏 -->
+                        <div class="mt-4 flex items-center justify-end gap-3">
+                            <button onclick="cancelEdit()" class="text-sm text-on-surface/60 hover:text-on-surface px-4 py-2">取消</button>
+                            <button onclick="saveNote()" class="bg-primary-container text-white text-sm font-bold px-6 py-2 rounded-lg hover:bg-primary-container/80 transition-all">保存</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
 </div>
 
 <!-- ============ 设置弹窗 ============ -->
@@ -947,6 +1106,425 @@ async function send() {{
     sendBtn.disabled = false;
     sendBtn.innerHTML = '<span class="material-symbols-outlined text-base">send</span>';
     queryInput.focus();
+}}
+
+// ---- 笔记管理 ----
+
+let notesState = {{
+    page: 1,
+    pageSize: 20,
+    folder: null,
+    domain: null,
+    tag: null,
+    keyword: null,
+    currentNote: null,
+    isEditing: false,
+}};
+
+function showNotesView() {{
+    document.getElementById('chatView').classList.add('hidden');
+    document.getElementById('notesView').classList.remove('hidden');
+    document.getElementById('notesNavTitle').textContent = '笔记管理';
+    loadNotes();
+    loadNotesFilters();
+}}
+
+function showChatView() {{
+    document.getElementById('notesView').classList.add('hidden');
+    document.getElementById('chatView').classList.remove('hidden');
+}}
+
+async function loadNotes() {{
+    const listDiv = document.getElementById('notesList');
+    listDiv.innerHTML = '<div class="text-xs text-on-surface/30 text-center py-8">加载中...</div>';
+
+    try {{
+        const params = new URLSearchParams();
+        params.set('page', notesState.page);
+        params.set('page_size', notesState.pageSize);
+        if (notesState.folder) params.set('folder', notesState.folder);
+        if (notesState.domain) params.set('domain', notesState.domain);
+        if (notesState.tag) params.set('tag', notesState.tag);
+        if (notesState.keyword) params.set('keyword', notesState.keyword);
+
+        const headers = token ? {{ 'Authorization': 'Bearer ' + token }} : {{}};
+        const resp = await fetch('/api/v1/notes?' + params.toString(), {{ headers }});
+        const data = await resp.json();
+
+        document.getElementById('notesCount').textContent = `共 ${{data.total || 0}} 篇笔记`;
+        renderNotesList(data.items || []);
+        renderNotesPagination(data.total || 0, data.page || 1, data.page_size || 20);
+    }} catch (e) {{
+        listDiv.innerHTML = '<div class="text-xs text-red-400 text-center py-8">加载失败</div>';
+    }}
+}}
+
+function renderNotesList(items) {{
+    const listDiv = document.getElementById('notesList');
+    if (!items.length) {{
+        listDiv.innerHTML = '<div class="text-xs text-on-surface/30 text-center py-8">暂无笔记</div>';
+        return;
+    }}
+
+    listDiv.innerHTML = items.map(note => {{
+        const domainColor = {{
+            '通识': 'bg-blue-500/10 text-blue-400',
+            'AI/ML': 'bg-purple-500/10 text-purple-400',
+            '编程': 'bg-green-500/10 text-green-400',
+            '面试': 'bg-orange-500/10 text-orange-400',
+        }}[note.domain] || 'bg-white/5 text-on-surface/50';
+
+        const tagsHtml = (note.tags || []).map(t => `<span class="px-1.5 py-0.5 rounded bg-white/5 text-[10px] text-on-surface/50">${{escapeHtml(t)}}</span>`).join('');
+
+        return `
+            <div onclick="showNoteDetail('${{encodeURIComponent(note.relative_path)}}')" class="note-card cursor-pointer p-3 rounded-xl border border-white/5 hover:border-white/10">
+                <div class="flex items-start justify-between gap-2">
+                    <div class="flex-1 min-w-0">
+                        <div class="text-sm font-medium text-on-surface truncate">${{escapeHtml(note.title)}}</div>
+                        <div class="text-[10px] text-on-surface/40 mt-0.5 truncate">${{escapeHtml(note.folder)}} · ${{note.format}}</div>
+                    </div>
+                    <span class="shrink-0 px-2 py-0.5 rounded-full text-[10px] font-medium ${{domainColor}}">${{escapeHtml(note.domain)}}</span>
+                </div>
+                <div class="flex items-center gap-2 mt-2">${{tagsHtml}}</div>
+            </div>
+        `;
+    }}).join('');
+}}
+
+function renderNotesPagination(total, page, pageSize) {{
+    const div = document.getElementById('notesPagination');
+    const totalPages = Math.ceil(total / pageSize) || 1;
+    if (totalPages <= 1) {{
+        div.innerHTML = '';
+        return;
+    }}
+
+    let html = '';
+    if (page > 1) {{
+        html += `<button onclick="goNotesPage(${{page - 1}})" class="px-2 py-1 rounded text-xs text-on-surface/60 hover:bg-white/5">上一页</button>`;
+    }}
+    html += `<span class="text-xs text-on-surface/40">${{page}} / ${{totalPages}}</span>`;
+    if (page < totalPages) {{
+        html += `<button onclick="goNotesPage(${{page + 1}})" class="px-2 py-1 rounded text-xs text-on-surface/60 hover:bg-white/5">下一页</button>`;
+    }}
+    div.innerHTML = html;
+}}
+
+function goNotesPage(p) {{
+    notesState.page = p;
+    loadNotes();
+}}
+
+async function loadNotesFilters() {{
+    try {{
+        const headers = token ? {{ 'Authorization': 'Bearer ' + token }} : {{}};
+
+        // 领域
+        const domainResp = await fetch('/api/v1/domains', {{ headers }});
+        const domainData = await domainResp.json();
+        const domains = domainData.domains || {{}};
+        const domainDiv = document.getElementById('notesDomainFilters');
+        domainDiv.innerHTML = Object.keys(domains).map(d => `
+            <button onclick="filterNotesByDomain('${{d}}')" class="w-full text-left px-2 py-1.5 rounded-lg text-xs text-on-surface/60 hover:bg-white/5 hover:text-on-surface transition-colors ${{notesState.domain === d ? 'bg-white/5 text-on-surface' : ''}}">
+                ${{escapeHtml(d)}} <span class="text-on-surface/30">(${{domains[d]}})</span>
+            </button>
+        `).join('');
+
+        // 文件夹
+        const folderResp = await fetch('/api/v1/folders', {{ headers }});
+        const folderData = await folderResp.json();
+        const folderDiv = document.getElementById('notesFolderFilters');
+        folderDiv.innerHTML = (folderData.folders || []).map(f => `
+            <button onclick="filterNotesByFolder('${{f}}')" class="w-full text-left px-2 py-1 rounded-lg text-xs text-on-surface/60 hover:bg-white/5 hover:text-on-surface transition-colors truncate ${{notesState.folder === f ? 'bg-white/5 text-on-surface' : ''}}">
+                ${{escapeHtml(f)}}
+            </button>
+        `).join('');
+
+        // 标签
+        const tagResp = await fetch('/api/v1/tags?with_count=true', {{ headers }});
+        const tagData = await tagResp.json();
+        const tagDiv = document.getElementById('notesTagFilters');
+        tagDiv.innerHTML = (tagData.tags || []).slice(0, 20).map(t => `
+            <button onclick="filterNotesByTag('${{t.name}}')" class="px-2 py-1 rounded-lg text-[10px] text-on-surface/60 hover:bg-white/5 hover:text-on-surface transition-colors ${{notesState.tag === t.name ? 'bg-white/5 text-on-surface' : ''}}">
+                ${{escapeHtml(t.name)}}${{t.count ? ` · ${{t.count}}` : ''}}
+            </button>
+        `).join('');
+    }} catch (e) {{}}
+}}
+
+function filterNotesByDomain(d) {{
+    notesState.domain = notesState.domain === d ? null : d;
+    notesState.page = 1;
+    loadNotes();
+    loadNotesFilters();
+}}
+
+function filterNotesByFolder(f) {{
+    notesState.folder = notesState.folder === f ? null : f;
+    notesState.page = 1;
+    loadNotes();
+    loadNotesFilters();
+}}
+
+function filterNotesByTag(t) {{
+    notesState.tag = notesState.tag === t ? null : t;
+    notesState.page = 1;
+    loadNotes();
+    loadNotesFilters();
+}}
+
+async function searchNotes() {{
+    const q = document.getElementById('notesSearchInput').value.trim();
+    if (!q) {{
+        notesState.keyword = null;
+        notesState.page = 1;
+        loadNotes();
+        return;
+    }}
+    // 使用全文搜索 API
+    try {{
+        const headers = token ? {{ 'Authorization': 'Bearer ' + token }} : {{}};
+        const resp = await fetch('/api/v1/notes/search?q=' + encodeURIComponent(q), {{ headers }});
+        const data = await resp.json();
+        document.getElementById('notesCount').textContent = `搜索 "${{escapeHtml(q)}}" 找到 ${{(data.results || []).length}} 个结果`;
+        renderNotesSearchResults(data.results || []);
+        document.getElementById('notesPagination').innerHTML = '';
+    }} catch (e) {{}}
+}}
+
+function renderNotesSearchResults(results) {{
+    const listDiv = document.getElementById('notesList');
+    if (!results.length) {{
+        listDiv.innerHTML = '<div class="text-xs text-on-surface/30 text-center py-8">无搜索结果</div>';
+        return;
+    }}
+    listDiv.innerHTML = results.map(r => {{
+        const note = r.note;
+        const chunks = (r.matched_chunks || []).map(c => `<div class="text-[10px] text-on-surface/40 truncate">${{escapeHtml(c)}}</div>`).join('');
+        return `
+            <div onclick="showNoteDetail('${{encodeURIComponent(note.relative_path)}}')" class="note-card cursor-pointer p-3 rounded-xl border border-white/5 hover:border-white/10">
+                <div class="flex items-center gap-2">
+                    <span class="text-xs font-medium text-primary">${{(r.score * 100).toFixed(0)}}%</span>
+                    <span class="text-sm font-medium text-on-surface truncate">${{escapeHtml(note.title)}}</span>
+                </div>
+                <div class="text-[10px] text-on-surface/40 mt-0.5">${{escapeHtml(note.folder)}}</div>
+                <div class="mt-1 space-y-0.5">${{chunks}}</div>
+            </div>
+        `;
+    }}).join('');
+}}
+
+async function showNoteDetail(encodedPath) {{
+    const relativePath = decodeURIComponent(encodedPath);
+    try {{
+        const headers = token ? {{ 'Authorization': 'Bearer ' + token }} : {{}};
+        const resp = await fetch('/api/v1/notes/' + encodeURIComponent(relativePath), {{ headers }});
+        const note = await resp.json();
+        if (note.error) return;
+
+        notesState.currentNote = note;
+        document.getElementById('notesListView').classList.add('hidden');
+        document.getElementById('noteDetailView').classList.remove('hidden');
+        document.getElementById('noteEditorView').classList.add('hidden');
+        document.getElementById('notesNavTitle').textContent = note.title;
+
+        // 面包屑
+        document.getElementById('noteBreadcrumb').innerHTML = `
+            <button onclick="backToNotesList()" class="hover:text-on-surface transition-colors">笔记管理</button>
+            <span class="text-on-surface/20">/</span>
+            <span class="truncate">${{escapeHtml(note.folder)}}</span>
+            <span class="text-on-surface/20">/</span>
+            <span class="truncate">${{escapeHtml(note.title)}}</span>
+        `;
+
+        // 元数据
+        document.getElementById('noteDomainBadge').textContent = note.domain;
+        document.getElementById('noteDate').textContent = note.date || '';
+        document.getElementById('noteWordCount').textContent = note.word_count ? `${{note.word_count}} 字` : '';
+
+        // 标签
+        const tagsDiv = document.getElementById('noteTags');
+        tagsDiv.innerHTML = (note.tags || []).map(t => `<span class="px-2 py-0.5 rounded-full bg-white/5 text-xs text-on-surface/60">${{escapeHtml(t)}}</span>`).join('');
+
+        // 内容（Markdown 渲染）
+        if (note.format === 'markdown') {{
+            document.getElementById('noteContent').innerHTML = marked.parse(note.content || '');
+            document.getElementById('noteDownloadBtn').classList.add('hidden');
+        }} else {{
+            document.getElementById('noteContent').innerHTML = `
+                <div class="text-sm text-on-surface/50 text-center py-12">
+                    <div class="material-symbols-outlined text-4xl text-on-surface/20 mb-2">description</div>
+                    <div>此格式不支持在线预览</div>
+                    <div class="text-xs text-on-surface/30 mt-1">${{escapeHtml(note.format || '')}}</div>
+                </div>
+            `;
+            document.getElementById('noteDownloadBtn').classList.remove('hidden');
+        }}
+
+        // 双向链接
+        const linksDiv = document.getElementById('noteOutboundLinks');
+        if (note.outbound_links && note.outbound_links.length) {{
+            linksDiv.classList.remove('hidden');
+            document.getElementById('noteOutboundLinksList').innerHTML = note.outbound_links.map(l => `
+                <span class="px-2 py-0.5 rounded-lg bg-primary/10 text-primary text-xs cursor-pointer hover:bg-primary/20 transition-colors">[[${{escapeHtml(l)}}]]</span>
+            `).join('');
+        }} else {{
+            linksDiv.classList.add('hidden');
+        }}
+    }} catch (e) {{}}
+}}
+
+function backToNotesList() {{
+    document.getElementById('noteDetailView').classList.add('hidden');
+    document.getElementById('noteEditorView').classList.add('hidden');
+    document.getElementById('notesListView').classList.remove('hidden');
+    document.getElementById('notesNavTitle').textContent = '笔记管理';
+    notesState.currentNote = null;
+    notesState.isEditing = false;
+}}
+
+function editCurrentNote() {{
+    const note = notesState.currentNote;
+    if (!note) return;
+    if (note.format !== 'markdown') {{
+        alert('仅支持编辑 Markdown 笔记');
+        return;
+    }}
+    notesState.isEditing = true;
+    document.getElementById('noteDetailView').classList.add('hidden');
+    document.getElementById('noteEditorView').classList.remove('hidden');
+    document.getElementById('notesNavTitle').textContent = '编辑笔记';
+
+    document.getElementById('editorNotePath').value = note.relative_path;
+    document.getElementById('editorNotePath').readOnly = true;
+    document.getElementById('editorNoteTags').value = (note.tags || []).join(', ');
+    document.getElementById('editorNoteDate').value = note.date || '';
+    document.getElementById('editorNoteContent').value = note.raw_content || note.content || '';
+    updateEditorPreview();
+}}
+
+function showNoteEditor() {{
+    if (!isLoggedIn) {{
+        alert('需要登录后才能新建笔记');
+        return;
+    }}
+    notesState.isEditing = false;
+    notesState.currentNote = null;
+    document.getElementById('notesListView').classList.add('hidden');
+    document.getElementById('noteDetailView').classList.add('hidden');
+    document.getElementById('noteEditorView').classList.remove('hidden');
+    document.getElementById('notesNavTitle').textContent = '新建笔记';
+
+    document.getElementById('editorNotePath').value = '';
+    document.getElementById('editorNotePath').readOnly = false;
+    document.getElementById('editorNoteTags').value = '';
+    document.getElementById('editorNoteDate').value = '';
+    document.getElementById('editorNoteContent').value = '# 标题\n\n正文内容...\n';
+    updateEditorPreview();
+}}
+
+function cancelEdit() {{
+    if (notesState.currentNote) {{
+        document.getElementById('noteEditorView').classList.add('hidden');
+        document.getElementById('noteDetailView').classList.remove('hidden');
+        document.getElementById('notesNavTitle').textContent = notesState.currentNote.title;
+    }} else {{
+        backToNotesList();
+    }}
+}}
+
+function updateEditorPreview() {{
+    const content = document.getElementById('editorNoteContent').value;
+    const previewDiv = document.getElementById('editorNotePreview');
+    if (previewDiv) {{
+        previewDiv.innerHTML = marked.parse(content || '');
+    }}
+}}
+
+document.getElementById('editorNoteContent').addEventListener('input', updateEditorPreview);
+
+async function saveNote() {{
+    const path = document.getElementById('editorNotePath').value.trim();
+    const tagsStr = document.getElementById('editorNoteTags').value.trim();
+    const date = document.getElementById('editorNoteDate').value || null;
+    const content = document.getElementById('editorNoteContent').value;
+
+    if (!path) {{
+        alert('请填写文件路径');
+        return;
+    }}
+    if (!path.endsWith('.md')) {{
+        alert('文件路径必须以 .md 结尾');
+        return;
+    }}
+
+    const tags = tagsStr ? tagsStr.split(',').map(t => t.trim()).filter(Boolean) : [];
+
+    try {{
+        const headers = {{
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + token,
+        }};
+
+        let resp;
+        if (notesState.isEditing && notesState.currentNote) {{
+            // 更新
+            resp = await fetch('/api/v1/notes/' + encodeURIComponent(notesState.currentNote.relative_path), {{
+                method: 'PUT',
+                headers,
+                body: JSON.stringify({{ content, tags, date }}),
+            }});
+        }} else {{
+            // 新建：需要提取标题
+            const titleMatch = content.match(/^#\s+(.+)$/m);
+            const title = titleMatch ? titleMatch[1].trim() : path.replace('.md', '').split('/').pop();
+            resp = await fetch('/api/v1/notes', {{
+                method: 'POST',
+                headers,
+                body: JSON.stringify({{ relative_path: path, title, content, tags, date }}),
+            }});
+        }}
+
+        const data = await resp.json();
+        if (data.error) {{
+            alert(data.error);
+            return;
+        }}
+
+        // 保存成功，刷新列表并返回
+        notesState.currentNote = data;
+        notesState.isEditing = false;
+        await loadNotes();
+        showNoteDetail(encodeURIComponent(data.relative_path));
+    }} catch (e) {{
+        alert('保存失败: ' + e.message);
+    }}
+}}
+
+async function deleteCurrentNote() {{
+    const note = notesState.currentNote;
+    if (!note) return;
+    if (!confirm(`确定要删除笔记 "${{note.title}}" 吗？此操作不可恢复。`)) return;
+
+    try {{
+        const headers = token ? {{ 'Authorization': 'Bearer ' + token }} : {{}};
+        await fetch('/api/v1/notes/' + encodeURIComponent(note.relative_path), {{ method: 'DELETE', headers }});
+        backToNotesList();
+        await loadNotes();
+    }} catch (e) {{
+        alert('删除失败');
+    }}
+}}
+
+function downloadCurrentNote() {{
+    const note = notesState.currentNote;
+    if (!note) return;
+    window.open('/api/v1/documents/download/' + encodeURIComponent(note.relative_path), '_blank');
+}}
+
+function refreshNotes() {{
+    loadNotes();
+    loadNotesFilters();
 }}
 
 // ---- 初始化 ----
