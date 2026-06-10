@@ -280,6 +280,8 @@ def get_user_by_token(token: str) -> dict | None:
 # ---- 中间件 ----
 
 class APIKeyMiddleware(BaseHTTPMiddleware):
+    """认证中间件 — 始终解析 Bearer token，但不强制非公开路径必须认证（向后兼容）"""
+
     def __init__(self, app, api_key: str | None = None):
         super().__init__(app)
         self.api_key = api_key or os.getenv("API_KEY", "")
@@ -287,17 +289,13 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
 
-        if not self.api_key and not _user_store.has_any_user():
-            return await call_next(request)
+        # 公开路径直接放行（无需认证）
         if path in PUBLIC_PATHS:
             return await call_next(request)
         if path.startswith("/assets"):
             return await call_next(request)
 
-        api_key = request.headers.get("X-API-Key", "")
-        if api_key and api_key == self.api_key:
-            return await call_next(request)
-
+        # 始终尝试解析 Bearer token，验证成功则注入用户信息供下游使用（审计日志等）
         auth_header = request.headers.get("Authorization", "")
         if auth_header.startswith("Bearer "):
             token = auth_header[7:]
@@ -305,6 +303,13 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
             if user_data:
                 request.state.user = user_data["username"]
                 request.state.email = user_data["email"]
-                return await call_next(request)
 
-        return JSONResponse(status_code=401, content={"error": "Unauthorized"})
+        # 若配置了 API_KEY，则强制校验 X-API-Key（机器访问场景）
+        if self.api_key:
+            api_key = request.headers.get("X-API-Key", "")
+            if api_key and api_key == self.api_key:
+                return await call_next(request)
+            return JSONResponse(status_code=401, content={"error": "Unauthorized"})
+
+        # 未配置 API_KEY 时允许匿名访问，保持向后兼容
+        return await call_next(request)

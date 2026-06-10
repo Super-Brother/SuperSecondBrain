@@ -185,9 +185,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# 始终启用认证中间件（解析 Bearer token 注入 request.state.user，供审计日志使用）
+# 仅在 API_KEY 环境变量设置时才强制校验 X-API-Key
 api_key = os.getenv("API_KEY", "")
+app.add_middleware(APIKeyMiddleware, api_key=api_key)
 if api_key:
-    app.add_middleware(APIKeyMiddleware, api_key=api_key)
     log.info("API Key 认证已启用")
 
 
