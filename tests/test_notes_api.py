@@ -37,6 +37,14 @@ def _setup_vault():
         encoding="utf-8",
     )
 
+    # 深层目录中的笔记，用于验证树形结构和过滤时保留祖先路径
+    deepdir = vault / "父目录" / "子层"
+    deepdir.mkdir(parents=True)
+    (deepdir / "深笔记.md").write_text(
+        "# 深笔记\n\n深层目录中的内容。\n",
+        encoding="utf-8",
+    )
+
     # 非 Markdown 文件
     (vault / "文档.pdf").write_text("fake pdf content", encoding="utf-8")
 
@@ -152,6 +160,55 @@ class TestGetNote:
     def test_get_note_not_found(self, client):
         r = client.get("/api/v1/notes/不存在的笔记.md")
         assert r.status_code == 404
+
+
+class TestNotesTree:
+    """测试笔记树接口"""
+
+    @staticmethod
+    def _find(nodes, node_type, **attrs):
+        for node in nodes:
+            if node.get("type") == node_type and all(node.get(k) == v for k, v in attrs.items()):
+                return node
+            child = TestNotesTree._find(node.get("children", []), node_type, **attrs)
+            if child:
+                return child
+        return None
+
+    def test_notes_tree_mixes_folders_and_notes(self, client):
+        r = client.get("/api/v1/notes/tree")
+        assert r.status_code == 200
+        d = r.json()
+
+        assert d["total"] >= 4
+        assert isinstance(d["tree"], list)
+        assert self._find(d["tree"], "folder", path="子目录")["count"] == 1
+        assert self._find(d["tree"], "note", relative_path="测试笔记.md")
+        assert not self._find(d["tree"], "folder", path="root")
+
+    def test_notes_tree_filter_keeps_ancestors(self, client):
+        r = client.get("/api/v1/notes/tree?keyword=深笔记")
+        assert r.status_code == 200
+        d = r.json()
+
+        parent = self._find(d["tree"], "folder", path="父目录")
+        child = self._find(d["tree"], "folder", path="父目录/子层")
+        note = self._find(d["tree"], "note", relative_path="父目录/子层/深笔记.md")
+
+        assert d["total"] == 1
+        assert parent is not None
+        assert child is not None
+        assert note is not None
+        assert self._find(d["tree"], "note", relative_path="测试笔记.md") is None
+
+    def test_notes_tree_filter_by_tag(self, client):
+        r = client.get("/api/v1/notes/tree?tag=测试")
+        assert r.status_code == 200
+        d = r.json()
+
+        assert d["total"] == 1
+        assert self._find(d["tree"], "note", relative_path="测试笔记.md")
+        assert self._find(d["tree"], "note", relative_path="子目录/子笔记.md") is None
 
 
 class TestCreateNote:

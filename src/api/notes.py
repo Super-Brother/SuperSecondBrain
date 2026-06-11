@@ -18,6 +18,9 @@ from src.parsers.obsidian_parser import ObsidianParser, classify_domain
 from src.utils.logger import log
 
 
+SUPPORTED_NOTE_EXTENSIONS = (".md", ".pdf", ".docx", ".pptx", ".xlsx")
+
+
 # ---- 辅助函数 ----
 
 
@@ -125,6 +128,121 @@ def _parse_generic_meta(router: DocumentRouter, file_path: Path, rel_path: str, 
 # ---- 核心 CRUD ----
 
 
+def scan_note_metadata(vault_path: str) -> list[dict]:
+    """扫描 vault 文件系统，返回所有支持格式的笔记元数据"""
+    vault = Path(vault_path).resolve()
+    if not vault.exists():
+        return []
+
+    parser = ObsidianParser(vault_path)
+    router = DocumentRouter(use_obsidian=True)
+    notes = []
+
+    for ext in SUPPORTED_NOTE_EXTENSIONS:
+        for file_path in vault.rglob(f"*{ext}"):
+            rel_parts = file_path.relative_to(vault).parts
+            if any(part.startswith(".") for part in rel_parts):
+                continue
+
+            rel_path = str(file_path.relative_to(vault))
+            meta = None
+            if ext == ".md":
+                meta = _parse_md_meta(parser, file_path, rel_path, vault_path)
+            if meta is None:
+                meta = _parse_generic_meta(router, file_path, rel_path, vault_path)
+            notes.append(meta)
+
+    notes.sort(key=lambda n: (n["folder"], n["title"]))
+    return notes
+
+
+def filter_note_metadata(
+    notes: list[dict],
+    folder: str | None = None,
+    domain: str | None = None,
+    tag: str | None = None,
+    keyword: str | None = None,
+) -> list[dict]:
+    """按文件夹、领域、标签、关键词过滤笔记元数据"""
+    filtered = notes
+    if folder:
+        filtered = [n for n in filtered if n["folder"] == folder or n["folder"].startswith(folder + "/")]
+    if domain:
+        filtered = [n for n in filtered if n.get("domain") == domain]
+    if tag:
+        filtered = [n for n in filtered if tag in n.get("tags", [])]
+    if keyword:
+        kw = keyword.lower()
+        filtered = [n for n in filtered if kw in n["title"].lower()]
+    return filtered
+
+
+def _note_tree_node(note: dict) -> dict:
+    return {
+        "type": "note",
+        "title": note["title"],
+        "relative_path": note["relative_path"],
+        "folder": note["folder"],
+        "domain": note["domain"],
+        "tags": note.get("tags", []),
+        "date": note.get("date"),
+        "format": note["format"],
+    }
+
+
+def build_notes_tree(notes: list[dict]) -> list[dict]:
+    """把过滤后的笔记元数据构造成文件夹 + 笔记混合树"""
+    root: list[dict] = []
+    folders: dict[str, dict] = {}
+
+    def ensure_folder(path: str) -> dict:
+        if path in folders:
+            return folders[path]
+
+        parts = path.split("/")
+        name = parts[-1]
+        node = {
+            "type": "folder",
+            "name": name,
+            "path": path,
+            "count": 0,
+            "children": [],
+        }
+        folders[path] = node
+
+        if len(parts) == 1:
+            root.append(node)
+        else:
+            parent = ensure_folder("/".join(parts[:-1]))
+            parent["children"].append(node)
+        return node
+
+    for note in notes:
+        folder = note.get("folder") or "root"
+        if folder == "root":
+            root.append(_note_tree_node(note))
+            continue
+
+        parts = folder.split("/")
+        for i in range(1, len(parts) + 1):
+            ensure_folder("/".join(parts[:i]))["count"] += 1
+        folders[folder]["children"].append(_note_tree_node(note))
+
+    def sort_nodes(nodes: list[dict]) -> list[dict]:
+        nodes.sort(
+            key=lambda node: (
+                0 if node["type"] == "folder" else 1,
+                (node.get("name") or node.get("title") or "").lower(),
+            )
+        )
+        for node in nodes:
+            if node["type"] == "folder":
+                sort_nodes(node["children"])
+        return nodes
+
+    return sort_nodes(root)
+
+
 def list_notes(
     vault_path: str,
     page: int = 1,
@@ -138,43 +256,13 @@ def list_notes(
 
     支持按文件夹、领域、标签、关键词过滤。
     """
-    vault = Path(vault_path).resolve()
-    if not vault.exists():
-        return {"total": 0, "page": page, "page_size": page_size, "items": []}
-
-    parser = ObsidianParser(vault_path)
-    router = DocumentRouter(use_obsidian=True)
-    notes = []
-
-    # 扫描所有支持的文件格式
-    for ext in (".md", ".pdf", ".docx", ".pptx", ".xlsx"):
-        for file_path in vault.rglob(f"*{ext}"):
-            # 排除隐藏目录（.obsidian, .git 等）
-            rel_parts = file_path.relative_to(vault).parts
-            if any(part.startswith(".") for part in rel_parts):
-                continue
-
-            rel_path = str(file_path.relative_to(vault))
-            meta = None
-            if ext == ".md":
-                meta = _parse_md_meta(parser, file_path, rel_path, vault_path)
-            if meta is None:
-                meta = _parse_generic_meta(router, file_path, rel_path, vault_path)
-            notes.append(meta)
-
-    # ---- 过滤 ----
-    if folder:
-        notes = [n for n in notes if n["folder"] == folder or n["folder"].startswith(folder + "/")]
-    if domain:
-        notes = [n for n in notes if n.get("domain") == domain]
-    if tag:
-        notes = [n for n in notes if tag in n.get("tags", [])]
-    if keyword:
-        kw = keyword.lower()
-        notes = [n for n in notes if kw in n["title"].lower()]
-
-    # 排序：按文件夹+标题
-    notes.sort(key=lambda n: (n["folder"], n["title"]))
+    notes = filter_note_metadata(
+        scan_note_metadata(vault_path),
+        folder=folder,
+        domain=domain,
+        tag=tag,
+        keyword=keyword,
+    )
 
     total = len(notes)
     start = (page - 1) * page_size
@@ -185,6 +273,25 @@ def list_notes(
         "page": page,
         "page_size": page_size,
         "items": notes[start:end],
+    }
+
+
+def list_notes_tree(
+    vault_path: str,
+    domain: str | None = None,
+    tag: str | None = None,
+    keyword: str | None = None,
+) -> dict:
+    """返回文件夹和笔记混合的层级树"""
+    notes = filter_note_metadata(
+        scan_note_metadata(vault_path),
+        domain=domain,
+        tag=tag,
+        keyword=keyword,
+    )
+    return {
+        "total": len(notes),
+        "tree": build_notes_tree(notes),
     }
 
 
@@ -444,7 +551,7 @@ def list_folders(vault_path: str) -> list[str]:
         return []
 
     folders = set()
-    for ext in (".md", ".pdf", ".docx", ".pptx", ".xlsx"):
+    for ext in SUPPORTED_NOTE_EXTENSIONS:
         for file_path in vault.rglob(f"*{ext}"):
             rel_parts = file_path.relative_to(vault).parts
             if any(part.startswith(".") for part in rel_parts):

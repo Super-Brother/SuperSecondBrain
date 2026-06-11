@@ -137,6 +137,55 @@ body {{ font-family: 'Inter', sans-serif; -webkit-tap-highlight-color: transpare
     visibility: hidden;
     pointer-events: none;
 }}
+.notes-tree-row {{
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-height: 28px;
+    padding: 3px 6px;
+    border-radius: 6px;
+    cursor: pointer;
+    color: rgba(226,226,230,0.62);
+    transition: background-color 0.15s, color 0.15s;
+}}
+.notes-tree-row:hover {{ background: rgba(255,255,255,0.05); color: #e2e2e6; }}
+.notes-tree-row.active {{ background: rgba(46,91,255,0.18); color: #fff; }}
+.notes-tree-expander {{
+    width: 18px;
+    height: 18px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 15px;
+    color: rgba(255,255,255,0.38);
+    font-family: 'Material Symbols Outlined';
+    flex-shrink: 0;
+}}
+.notes-tree-icon {{
+    font-size: 16px;
+    color: rgba(255,255,255,0.48);
+    font-family: 'Material Symbols Outlined';
+    flex-shrink: 0;
+}}
+.notes-tree-title {{
+    flex: 1;
+    min-width: 0;
+    font-size: 12px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}}
+.notes-tree-meta {{
+    font-size: 10px;
+    color: rgba(255,255,255,0.35);
+    flex-shrink: 0;
+}}
+.notes-tree-empty {{
+    color: rgba(226,226,230,0.35);
+    font-size: 12px;
+    text-align: center;
+    padding: 24px 8px;
+}}
 </style>
 </head>
 <body class="bg-surface text-on-surface h-screen overflow-hidden">
@@ -186,7 +235,7 @@ body {{ font-family: 'Inter', sans-serif; -webkit-tap-highlight-color: transpare
 <div id="mainApp" class="hidden h-full flex">
 
     <!-- 左侧历史会话栏（桌面端常驻，移动端抽屉） -->
-    <aside id="historyDrawer" class="drawer fixed md:relative md:translate-x-0 z-40 w-[280px] h-full bg-surface-container/80 border-r border-white/5 flex flex-col -translate-x-full md:w-64 shrink-0">
+    <aside id="historyDrawer" class="drawer fixed md:relative md:translate-x-0 z-40 w-[280px] h-full bg-surface-container/80 border-r border-white/5 flex flex-col -translate-x-full md:w-64 flex-shrink-0">
         <div class="p-4 border-b border-white/5 flex items-center justify-between">
             <div class="flex items-center gap-2">
                 <span class="material-symbols-outlined text-primary">psychology</span>
@@ -223,7 +272,7 @@ body {{ font-family: 'Inter', sans-serif; -webkit-tap-highlight-color: transpare
     <!-- 中间聊天区域 -->
     <main id="chatView" class="flex-1 flex flex-col h-full min-w-0 relative">
         <!-- 顶部导航 -->
-        <nav class="bg-background/80 backdrop-blur-xl sticky top-0 z-20 flex items-center justify-between px-4 h-14 border-b border-white/5 shrink-0">
+        <nav class="bg-background/80 backdrop-blur-xl sticky top-0 z-20 flex items-center justify-between px-4 h-14 border-b border-white/5 flex-shrink-0">
             <div class="flex items-center gap-3">
                 <button onclick="toggleHistoryDrawer()" class="md:hidden material-symbols-outlined text-on-surface/60">menu</button>
                 <span id="currentSessionTitle" class="text-sm font-semibold truncate max-w-[200px]">新对话</span>
@@ -249,11 +298,11 @@ body {{ font-family: 'Inter', sans-serif; -webkit-tap-highlight-color: transpare
         </div>
 
         <!-- 底部输入栏 -->
-        <div class="shrink-0 p-3 md:p-4 bg-surface border-t border-white/5">
+        <div class="flex-shrink-0 p-3 md:p-4 bg-surface border-t border-white/5">
             <div class="max-w-2xl mx-auto">
                 <div class="bg-surface-container-high rounded-xl flex items-end p-1.5 gap-2 border border-white/5">
                     <textarea id="query" class="flex-1 bg-transparent border-none focus:ring-0 text-on-surface py-2.5 px-3 resize-none placeholder-on-surface/40 text-sm max-h-[120px]" placeholder="输入你的问题..." rows="1"></textarea>
-                    <button id="sendBtn" onclick="send()" class="bg-primary-container text-white font-bold p-2.5 rounded-lg hover:bg-primary-container/80 transition-all flex items-center justify-center shrink-0 mb-0.5">
+                    <button id="sendBtn" onclick="send()" class="bg-primary-container text-white font-bold p-2.5 rounded-lg hover:bg-primary-container/80 transition-all flex items-center justify-center flex-shrink-0 mb-0.5">
                         <span class="material-symbols-outlined text-base">send</span>
                     </button>
                 </div>
@@ -265,7 +314,7 @@ body {{ font-family: 'Inter', sans-serif; -webkit-tap-highlight-color: transpare
     <!-- ============ 笔记管理视图 ============ -->
     <div id="notesView" class="hidden flex-1 flex flex-col h-full min-w-0 relative">
         <!-- 顶部导航 -->
-        <nav class="bg-background/80 backdrop-blur-xl sticky top-0 z-20 flex items-center justify-between px-4 h-14 border-b border-white/5 shrink-0">
+        <nav class="bg-background/80 backdrop-blur-xl sticky top-0 z-20 flex items-center justify-between px-4 h-14 border-b border-white/5 flex-shrink-0">
             <div class="flex items-center gap-3">
                 <button onclick="showChatView()" class="material-symbols-outlined text-on-surface/60 hover:text-on-surface">arrow_back</button>
                 <span id="notesNavTitle" class="text-sm font-semibold truncate">笔记管理</span>
@@ -278,32 +327,35 @@ body {{ font-family: 'Inter', sans-serif; -webkit-tap-highlight-color: transpare
         </nav>
 
         <!-- 笔记管理内容区 -->
-        <div id="notesContent" class="flex-1 overflow-y-auto scrollbar-hide">
-            <!-- 笔记列表视图 -->
-            <div id="notesListView" class="h-full flex">
-                <!-- 左侧过滤栏 -->
-                <div class="w-60 h-full border-r border-white/5 bg-surface-container/40 flex flex-col hidden md:flex">
-                    <div class="p-3 border-b border-white/5">
-                        <input id="notesSearchInput" type="text" placeholder="搜索笔记..." onkeydown="if(event.key==='Enter')searchNotes()" class="w-full bg-surface-container-high border-none text-on-surface rounded-lg py-2 px-3 text-sm placeholder-on-surface/40">
-                    </div>
-                    <div class="flex-1 overflow-y-auto p-3 space-y-4 scrollbar-hide">
-                        <div>
-                            <div class="text-[10px] font-bold text-on-surface/40 uppercase tracking-wider mb-2">领域</div>
-                            <div id="notesDomainFilters" class="space-y-1"></div>
-                        </div>
-                        <div>
-                            <div class="text-[10px] font-bold text-on-surface/40 uppercase tracking-wider mb-2">文件夹</div>
-                            <div id="notesFolderFilters" class="space-y-1 max-h-80 overflow-y-auto scrollbar-hide"></div>
-                        </div>
-                        <div>
-                            <div class="text-[10px] font-bold text-on-surface/40 uppercase tracking-wider mb-2">标签</div>
-                            <div id="notesTagFilters" class="flex flex-wrap gap-1"></div>
-                        </div>
+        <div id="notesContent" class="flex-1 flex min-h-0">
+            <!-- 左侧 Explorer：文件夹 + 笔记混合树 -->
+            <div id="notesLeftSidebar" class="w-full md:w-80 self-stretch border-r border-white/5 bg-surface-container/40 flex flex-col">
+                <div class="p-3 border-b border-white/5 space-y-2">
+                    <input id="notesSearchInput" type="text" placeholder="搜索笔记..." onkeydown="if(event.key==='Enter')searchNotes()" class="w-full bg-surface-container-high border-none text-on-surface rounded-lg py-2 px-3 text-sm placeholder-on-surface/40">
+                    <div class="flex items-center justify-between">
+                        <span id="notesTreeSummary" class="text-[11px] text-on-surface/45">加载中...</span>
+                        <button onclick="clearNotesFilters()" class="text-[11px] text-on-surface/40 hover:text-on-surface">清除筛选</button>
                     </div>
                 </div>
+                <div class="px-3 py-2 border-b border-white/5 space-y-2">
+                    <details>
+                        <summary class="cursor-pointer text-[10px] font-bold text-on-surface/40 uppercase tracking-wider">领域</summary>
+                        <div id="notesDomainFilters" class="mt-2 flex flex-wrap gap-1"></div>
+                    </details>
+                    <details>
+                        <summary class="cursor-pointer text-[10px] font-bold text-on-surface/40 uppercase tracking-wider">标签</summary>
+                        <div id="notesTagFilters" class="mt-2 flex flex-wrap gap-1"></div>
+                    </details>
+                </div>
+                <div id="notesTree" class="flex-1 overflow-y-auto p-2 scrollbar-hide">
+                    <div class="notes-tree-empty">加载中...</div>
+                </div>
+            </div>
 
-                <!-- 右侧笔记列表 -->
-                <div class="flex-1 flex flex-col min-w-0">
+            <!-- 右侧内容区（列表/详情/编辑切换） -->
+            <div id="notesRightPanel" class="hidden md:flex flex-1 flex-col min-w-0 min-h-0 relative">
+                <!-- 未选中笔记时的空状态 -->
+                <div id="notesListView" class="flex-1 flex flex-col">
                     <div id="notesListHeader" class="p-3 border-b border-white/5 flex items-center justify-between">
                         <span id="notesCount" class="text-xs text-on-surface/50">加载中...</span>
                         <div class="flex items-center gap-2">
@@ -313,83 +365,92 @@ body {{ font-family: 'Inter', sans-serif; -webkit-tap-highlight-color: transpare
                     <div id="notesList" class="flex-1 overflow-y-auto p-3 space-y-2 scrollbar-hide">
                         <div class="text-xs text-on-surface/30 text-center py-8">加载中...</div>
                     </div>
-                    <!-- 分页 -->
-                    <div id="notesPagination" class="p-3 border-t border-white/5 flex items-center justify-center gap-2"></div>
                 </div>
-            </div>
 
-            <!-- 笔记详情视图 -->
-            <div id="noteDetailView" class="hidden h-full flex flex-col">
-                <div class="flex-1 overflow-y-auto p-4 md:p-8 scrollbar-hide">
-                    <div class="max-w-3xl mx-auto">
-                        <!-- 面包屑 -->
-                        <div id="noteBreadcrumb" class="text-xs text-on-surface/40 mb-4 flex items-center gap-1"></div>
+                <!-- 笔记详情视图 -->
+                <div id="noteDetailView" class="hidden absolute inset-0 w-full h-full flex flex-col bg-background">
+                    <!-- 顶部面包屑栏（固定） -->
+                    <div class="px-4 md:px-8 py-3 border-b border-white/5 bg-surface-container flex-shrink-0 flex items-center justify-between">
+                        <div id="noteBreadcrumb" class="text-xs text-on-surface/40 flex items-center gap-1"></div>
+                        <button onclick="backToNotesList()" class="md:hidden material-symbols-outlined text-on-surface/60 hover:text-on-surface text-sm">close</button>
+                    </div>
 
-                        <!-- 元数据 -->
-                        <div class="flex flex-wrap items-center gap-2 mb-4">
-                            <span id="noteDomainBadge" class="px-2 py-0.5 rounded-full bg-primary/10 text-primary text-xs font-medium"></span>
-                            <span id="noteDate" class="text-xs text-on-surface/40"></span>
-                            <span id="noteWordCount" class="text-xs text-on-surface/40"></span>
-                        </div>
+                    <!-- 可滚动内容区 -->
+                    <div class="flex-1 overflow-y-auto p-4 md:p-8 scrollbar-hide">
+                        <div class="max-w-3xl mx-auto pb-4">
+                            <!-- 元数据 -->
+                            <div class="flex flex-wrap items-center gap-2 mb-4">
+                                <span id="noteDomainBadge" class="px-2 py-0.5 rounded-full bg-primary/10 text-primary text-xs font-medium"></span>
+                                <span id="noteDate" class="text-xs text-on-surface/40"></span>
+                                <span id="noteWordCount" class="text-xs text-on-surface/40"></span>
+                            </div>
 
-                        <!-- 标签 -->
-                        <div id="noteTags" class="flex flex-wrap gap-1.5 mb-6"></div>
+                            <!-- 标签 -->
+                            <div id="noteTags" class="flex flex-wrap gap-1.5 mb-6"></div>
 
-                        <!-- 内容 -->
-                        <div id="noteContent" class="prose prose-invert max-w-none text-sm leading-relaxed"></div>
+                            <!-- 内容 -->
+                            <div id="noteContent" class="prose prose-invert max-w-none text-sm leading-relaxed"></div>
 
-                        <!-- 双向链接 -->
-                        <div id="noteOutboundLinks" class="mt-8 hidden">
-                            <div class="text-xs font-bold text-on-surface/50 mb-2">双向链接</div>
-                            <div id="noteOutboundLinksList" class="flex flex-wrap gap-2"></div>
-                        </div>
-
-                        <!-- 操作栏 -->
-                        <div class="mt-8 flex items-center gap-3">
-                            <button onclick="editCurrentNote()" class="bg-primary-container text-white text-xs font-bold px-4 py-2 rounded-lg hover:bg-primary-container/80 transition-all flex items-center gap-1">
-                                <span class="material-symbols-outlined text-sm">edit</span>编辑
-                            </button>
-                            <button onclick="downloadCurrentNote()" id="noteDownloadBtn" class="hidden bg-surface-container-high text-on-surface text-xs font-bold px-4 py-2 rounded-lg hover:bg-surface-container-highest transition-all flex items-center gap-1">
-                                <span class="material-symbols-outlined text-sm">download</span>下载
-                            </button>
-                            <button onclick="deleteCurrentNote()" class="bg-red-500/10 text-red-400 text-xs font-bold px-4 py-2 rounded-lg hover:bg-red-500/20 transition-all flex items-center gap-1">
-                                <span class="material-symbols-outlined text-sm">delete</span>删除
-                            </button>
+                            <!-- 双向链接 -->
+                            <div id="noteOutboundLinks" class="mt-8 hidden">
+                                <div class="text-xs font-bold text-on-surface/50 mb-2">双向链接</div>
+                                <div id="noteOutboundLinksList" class="flex flex-wrap gap-2"></div>
+                            </div>
                         </div>
                     </div>
+
+                    <!-- 底部操作栏（固定） -->
+                    <div class="px-4 md:px-8 py-3 border-t border-white/5 bg-surface-container flex items-center gap-3 flex-shrink-0">
+                        <button onclick="editCurrentNote()" class="bg-primary-container text-white text-xs font-bold px-4 py-2 rounded-lg hover:bg-primary-container/80 transition-all flex items-center gap-1">
+                            <span class="material-symbols-outlined text-sm">edit</span>编辑
+                        </button>
+                        <button onclick="downloadCurrentNote()" id="noteDownloadBtn" class="hidden bg-surface-container-high text-on-surface text-xs font-bold px-4 py-2 rounded-lg hover:bg-surface-container-highest transition-all flex items-center gap-1">
+                            <span class="material-symbols-outlined text-sm">download</span>下载
+                        </button>
+                        <button onclick="deleteCurrentNote()" class="bg-red-500/10 text-red-400 text-xs font-bold px-4 py-2 rounded-lg hover:bg-red-500/20 transition-all flex items-center gap-1">
+                            <span class="material-symbols-outlined text-sm">delete</span>删除
+                        </button>
+                    </div>
                 </div>
-            </div>
 
-            <!-- 笔记编辑器视图 -->
-            <div id="noteEditorView" class="hidden h-full flex flex-col">
-                <div class="flex-1 overflow-y-auto p-4 md:p-6 scrollbar-hide">
-                    <div class="max-w-4xl mx-auto h-full flex flex-col">
-                        <!-- 编辑头部 -->
-                        <div class="flex items-center gap-3 mb-4">
-                            <input id="editorNotePath" type="text" placeholder="文件路径（如：未分类/新笔记.md）" class="flex-1 bg-surface-container-high border-none text-on-surface rounded-lg py-2 px-3 text-sm placeholder-on-surface/40">
-                        </div>
-                        <div class="flex items-center gap-3 mb-4">
-                            <input id="editorNoteTags" type="text" placeholder="标签（逗号分隔）" class="flex-1 bg-surface-container-high border-none text-on-surface rounded-lg py-2 px-3 text-sm placeholder-on-surface/40">
-                            <input id="editorNoteDate" type="date" class="bg-surface-container-high border-none text-on-surface rounded-lg py-2 px-3 text-sm">
-                        </div>
+                <!-- 笔记编辑器视图 -->
+                <div id="noteEditorView" class="hidden absolute inset-0 w-full h-full flex flex-col bg-background">
+                    <!-- 顶部栏（固定） -->
+                    <div class="px-4 md:px-8 py-3 border-b border-white/5 bg-surface-container flex-shrink-0 flex items-center justify-between">
+                        <div id="editorBreadcrumb" class="text-xs text-on-surface/40 flex items-center gap-1"></div>
+                        <button onclick="cancelEdit()" class="md:hidden material-symbols-outlined text-on-surface/60 hover:text-on-surface text-sm">close</button>
+                    </div>
 
-                        <!-- 编辑区 -->
-                        <div class="flex-1 flex gap-4 min-h-0">
-                            <div class="flex-1 flex flex-col min-w-0">
-                                <div class="text-[10px] font-bold text-on-surface/40 uppercase tracking-wider mb-1">Markdown</div>
-                                <textarea id="editorNoteContent" class="flex-1 w-full bg-surface-container-high border-none text-on-surface rounded-lg p-3 text-sm resize-none font-mono leading-relaxed placeholder-on-surface/40" placeholder="在此输入 Markdown 内容..."></textarea>
+                    <!-- 可滚动编辑区 -->
+                    <div class="flex-1 overflow-y-auto p-4 md:p-6 scrollbar-hide">
+                        <div class="max-w-4xl mx-auto">
+                            <!-- 编辑头部 -->
+                            <div class="flex items-center gap-3 mb-4">
+                                <input id="editorNotePath" type="text" placeholder="文件路径（如：未分类/新笔记.md）" class="flex-1 bg-surface-container-high border-none text-on-surface rounded-lg py-2 px-3 text-sm placeholder-on-surface/40">
                             </div>
-                            <div class="flex-1 flex flex-col min-w-0 hidden md:flex">
-                                <div class="text-[10px] font-bold text-on-surface/40 uppercase tracking-wider mb-1">预览</div>
-                                <div id="editorNotePreview" class="flex-1 w-full bg-surface-container-high border-none text-on-surface rounded-lg p-3 text-sm overflow-y-auto scrollbar-hide"></div>
+                            <div class="flex items-center gap-3 mb-4">
+                                <input id="editorNoteTags" type="text" placeholder="标签（逗号分隔）" class="flex-1 bg-surface-container-high border-none text-on-surface rounded-lg py-2 px-3 text-sm placeholder-on-surface/40">
+                                <input id="editorNoteDate" type="date" class="bg-surface-container-high border-none text-on-surface rounded-lg py-2 px-3 text-sm">
+                            </div>
+
+                            <!-- 编辑区 -->
+                            <div class="flex gap-4 min-h-0" style="height: calc(100vh - 280px);">
+                                <div class="flex-1 flex flex-col min-w-0">
+                                    <div class="text-[10px] font-bold text-on-surface/40 uppercase tracking-wider mb-1">Markdown</div>
+                                    <textarea id="editorNoteContent" class="flex-1 w-full bg-surface-container-high border-none text-on-surface rounded-lg p-3 text-sm resize-none font-mono leading-relaxed placeholder-on-surface/40" placeholder="在此输入 Markdown 内容..."></textarea>
+                                </div>
+                                <div class="flex-1 flex flex-col min-w-0 hidden md:flex">
+                                    <div class="text-[10px] font-bold text-on-surface/40 uppercase tracking-wider mb-1">预览</div>
+                                    <div id="editorNotePreview" class="flex-1 w-full bg-surface-container-high border-none text-on-surface rounded-lg p-3 text-sm overflow-y-auto scrollbar-hide"></div>
+                                </div>
                             </div>
                         </div>
+                    </div>
 
-                        <!-- 操作栏 -->
-                        <div class="mt-4 flex items-center justify-end gap-3">
-                            <button onclick="cancelEdit()" class="text-sm text-on-surface/60 hover:text-on-surface px-4 py-2">取消</button>
-                            <button onclick="saveNote()" class="bg-primary-container text-white text-sm font-bold px-6 py-2 rounded-lg hover:bg-primary-container/80 transition-all">保存</button>
-                        </div>
+                    <!-- 底部操作栏（固定） -->
+                    <div class="px-4 md:px-8 py-3 border-t border-white/5 bg-surface-container flex items-center justify-end gap-3 flex-shrink-0">
+                        <button onclick="cancelEdit()" class="text-sm text-on-surface/60 hover:text-on-surface px-4 py-2">取消</button>
+                        <button onclick="saveNote()" class="bg-primary-container text-white text-sm font-bold px-6 py-2 rounded-lg hover:bg-primary-container/80 transition-all">保存</button>
                     </div>
                 </div>
             </div>
@@ -401,13 +462,13 @@ body {{ font-family: 'Inter', sans-serif; -webkit-tap-highlight-color: transpare
 <div id="settingsOverlay" onclick="closeSettings()" class="fixed inset-0 bg-black/60 z-40 hidden backdrop-blur-sm"></div>
 <div id="settingsModal" class="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-50 w-full max-w-lg bg-surface-container rounded-2xl border border-white/10 shadow-2xl hidden flex-col max-h-[85vh]">
     <!-- 头部 -->
-    <div class="p-5 border-b border-white/5 flex items-center justify-between shrink-0">
+    <div class="p-5 border-b border-white/5 flex items-center justify-between flex-shrink-0">
         <h2 class="font-bold text-lg">设置</h2>
         <button onclick="closeSettings()" class="material-symbols-outlined text-on-surface/50 hover:text-on-surface transition-colors">close</button>
     </div>
 
     <!-- Tab 导航 -->
-    <div class="flex border-b border-white/5 shrink-0">
+    <div class="flex border-b border-white/5 flex-shrink-0">
         <button id="tabModelBtn" onclick="switchSettingsTab('model')" class="flex-1 py-3 text-sm font-medium text-primary border-b-2 border-primary transition-colors">模型配置</button>
         <button id="tabGeneralBtn" onclick="switchSettingsTab('general')" class="flex-1 py-3 text-sm font-medium text-on-surface/50 hover:text-on-surface transition-colors">通用设置</button>
     </div>
@@ -789,7 +850,7 @@ async function loadSession(sessionId) {{
                             <div class="bg-gradient-to-br from-primary-container to-blue-600 text-white px-4 py-2.5 rounded-2xl text-sm max-w-[85%] md:max-w-[70%] leading-relaxed">
                                 ${{escapeHtml(msg.content)}}
                             </div>
-                            <div class="w-7 h-7 rounded-full bg-primary-container flex items-center justify-center shrink-0 mt-0.5">
+                            <div class="w-7 h-7 rounded-full bg-primary-container flex items-center justify-center flex-shrink-0 mt-0.5">
                                 <span class="material-symbols-outlined text-white" style="font-size: 14px;">person</span>
                             </div>
                         </div>
@@ -1050,7 +1111,7 @@ function addMessage(role, content, sources = null, options = {{}}) {{
                 <div class="bg-gradient-to-br from-primary-container to-blue-600 text-white px-4 py-2.5 rounded-2xl text-sm max-w-[85%] md:max-w-[70%] leading-relaxed">
                     ${{escapeHtml(content)}}
                 </div>
-                <div class="w-7 h-7 rounded-full bg-primary-container flex items-center justify-center shrink-0 mt-0.5">
+                <div class="w-7 h-7 rounded-full bg-primary-container flex items-center justify-center flex-shrink-0 mt-0.5">
                     <span class="material-symbols-outlined text-white" style="font-size: 14px;">person</span>
                 </div>
             </div>
@@ -1169,83 +1230,60 @@ async function send() {{
 // ---- 笔记管理 ----
 
 let notesState = {{
-    page: 1,
-    pageSize: 20,
-    folder: null,
     domain: null,
     tag: null,
     keyword: null,
     currentNote: null,
     isEditing: false,
+    treeTotal: 0,
 }};
 
-// 文件夹树形展开状态
-let folderTreeState = {{
+let notesTreeState = {{
+    tree: [],
     expanded: new Set(),
+    savedExpandedBeforeFilter: null,
 }};
 
-function buildFolderTree(folders) {{
-    const root = [];
-    for (const path of folders.sort()) {{
-        const parts = path.split('/');
-        let current = root;
-        let builtPath = '';
-        for (let i = 0; i < parts.length; i++) {{
-            const part = parts[i];
-            builtPath = builtPath ? builtPath + '/' + part : part;
-            let node = current.find(n => n.name === part);
-            if (!node) {{
-                node = {{ name: part, path: builtPath, children: [] }};
-                current.push(node);
-            }}
-            current = node.children;
-        }}
-    }}
-    return root;
+function hasActiveNotesFilters() {{
+    return Boolean(notesState.domain || notesState.tag || notesState.keyword);
 }}
 
-function toggleFolderExpand(path) {{
-    if (folderTreeState.expanded.has(path)) {{
-        folderTreeState.expanded.delete(path);
+function setNotesMobilePanel(panel) {{
+    const sidebar = document.getElementById('notesLeftSidebar');
+    const rightPanel = document.getElementById('notesRightPanel');
+    if (!sidebar || !rightPanel) return;
+    if (window.innerWidth >= 768) {{
+        sidebar.classList.remove('hidden');
+        sidebar.classList.add('flex');
+        rightPanel.classList.remove('hidden');
+        rightPanel.classList.add('flex');
+        return;
+    }}
+    if (panel === 'tree') {{
+        sidebar.classList.remove('hidden');
+        sidebar.classList.add('flex');
+        rightPanel.classList.add('hidden');
+        rightPanel.classList.remove('flex');
     }} else {{
-        folderTreeState.expanded.add(path);
+        sidebar.classList.add('hidden');
+        sidebar.classList.remove('flex');
+        rightPanel.classList.remove('hidden');
+        rightPanel.classList.add('flex');
     }}
-    loadNotesFilters();
-}}
-
-function renderFolderTree(nodes, level = 0) {{
-    if (!nodes || !nodes.length) return '';
-    return nodes.map(node => {{
-        const hasChildren = node.children.length > 0;
-        const isExpanded = folderTreeState.expanded.has(node.path);
-        const isSelected = notesState.folder === node.path;
-        const indent = level * 16;
-
-        const expandIcon = hasChildren
-            ? (isExpanded ? 'expand_more' : 'chevron_right')
-            : '';
-        const folderIcon = isExpanded ? 'folder_open' : 'folder';
-
-        let html = '<div class="folder-tree-node">';
-        html += '<div class="folder-tree-row ' + (isSelected ? 'folder-tree-selected' : '') + '" style="padding-left: ' + indent + 'px">';
-        html += '<span class="folder-tree-expand-icon ' + (expandIcon ? '' : 'invisible') + '" onclick="event.stopPropagation(); toggleFolderExpand(&#39;' + node.path + '&#39;)">' + expandIcon + '</span>';
-        html += '<span class="folder-tree-folder-icon material-symbols-outlined">' + folderIcon + '</span>';
-        html += '<span class="folder-tree-label" onclick="filterNotesByFolder(&#39;' + node.path + '&#39;)">' + escapeHtml(node.name) + '</span>';
-        html += '</div>';
-
-        if (hasChildren && isExpanded) {{
-            html += renderFolderTree(node.children, level + 1);
-        }}
-        html += '</div>';
-        return html;
-    }}).join('');
 }}
 
 function showNotesView() {{
     document.getElementById('chatView').classList.add('hidden');
     document.getElementById('notesView').classList.remove('hidden');
     document.getElementById('notesNavTitle').textContent = '笔记管理';
-    loadNotes();
+    document.getElementById('notesListView').classList.remove('hidden');
+    document.getElementById('noteDetailView').classList.add('hidden');
+    document.getElementById('noteEditorView').classList.add('hidden');
+    notesState.currentNote = null;
+    notesState.isEditing = false;
+    setNotesMobilePanel('tree');
+    renderNotesEmptyState(notesState.treeTotal);
+    loadNotesTree();
     loadNotesFilters();
 }}
 
@@ -1254,85 +1292,52 @@ function showChatView() {{
     document.getElementById('chatView').classList.remove('hidden');
 }}
 
-async function loadNotes() {{
+function renderNotesEmptyState(total) {{
     const listDiv = document.getElementById('notesList');
-    listDiv.innerHTML = '<div class="text-xs text-on-surface/30 text-center py-8">加载中...</div>';
+    const count = total || 0;
+    document.getElementById('notesCount').textContent = `共 ${{count}} 篇笔记`;
+    listDiv.innerHTML = `
+        <div class="h-full min-h-[360px] flex flex-col items-center justify-center text-center text-on-surface/45">
+            <div class="material-symbols-outlined text-5xl text-on-surface/20 mb-3">article</div>
+            <div class="text-sm font-medium text-on-surface/70">从左侧选择一篇笔记查看</div>
+            <div class="text-xs mt-1">当前树中有 ${{count}} 篇笔记</div>
+        </div>
+    `;
+}}
 
+async function loadNotesTree() {{
+    const treeDiv = document.getElementById('notesTree');
+    const summary = document.getElementById('notesTreeSummary');
+    treeDiv.innerHTML = '<div class="notes-tree-empty">加载中...</div>';
     try {{
         const params = new URLSearchParams();
-        params.set('page', notesState.page);
-        params.set('page_size', notesState.pageSize);
-        if (notesState.folder) params.set('folder', notesState.folder);
         if (notesState.domain) params.set('domain', notesState.domain);
         if (notesState.tag) params.set('tag', notesState.tag);
         if (notesState.keyword) params.set('keyword', notesState.keyword);
 
         const headers = token ? {{ 'Authorization': 'Bearer ' + token }} : {{}};
-        const resp = await fetch('/api/v1/notes?' + params.toString(), {{ headers }});
+        const resp = await fetch('/api/v1/notes/tree?' + params.toString(), {{ headers }});
         const data = await resp.json();
+        notesTreeState.tree = data.tree || [];
+        notesState.treeTotal = data.total || 0;
 
-        document.getElementById('notesCount').textContent = `共 ${{data.total || 0}} 篇笔记`;
-        renderNotesList(data.items || []);
-        renderNotesPagination(data.total || 0, data.page || 1, data.page_size || 20);
+        if (hasActiveNotesFilters()) {{
+            expandAllNotesTreeFolders(notesTreeState.tree);
+        }}
+        if (notesState.currentNote) {{
+            expandNoteAncestors(notesState.currentNote.folder);
+        }}
+
+        renderNotesTree(notesTreeState.tree);
+        summary.textContent = hasActiveNotesFilters()
+            ? `筛选结果 ${{notesState.treeTotal}} 篇`
+            : `共 ${{notesState.treeTotal}} 篇笔记`;
+        if (!notesState.currentNote && !notesState.isEditing) {{
+            renderNotesEmptyState(notesState.treeTotal);
+        }}
     }} catch (e) {{
-        listDiv.innerHTML = '<div class="text-xs text-red-400 text-center py-8">加载失败</div>';
+        treeDiv.innerHTML = '<div class="notes-tree-empty text-red-400">加载失败</div>';
     }}
-}}
-
-function renderNotesList(items) {{
-    const listDiv = document.getElementById('notesList');
-    if (!items.length) {{
-        listDiv.innerHTML = '<div class="text-xs text-on-surface/30 text-center py-8">暂无笔记</div>';
-        return;
-    }}
-
-    listDiv.innerHTML = items.map(note => {{
-        const domainColor = {{
-            '通识': 'bg-blue-500/10 text-blue-400',
-            'AI/ML': 'bg-purple-500/10 text-purple-400',
-            '编程': 'bg-green-500/10 text-green-400',
-            '面试': 'bg-orange-500/10 text-orange-400',
-        }}[note.domain] || 'bg-white/5 text-on-surface/50';
-
-        const tagsHtml = (note.tags || []).map(t => `<span class="px-1.5 py-0.5 rounded bg-white/5 text-[10px] text-on-surface/50">${{escapeHtml(t)}}</span>`).join('');
-
-        return `
-            <div onclick="showNoteDetail('${{encodeURIComponent(note.relative_path)}}')" class="note-card cursor-pointer p-3 rounded-xl border border-white/5 hover:border-white/10">
-                <div class="flex items-start justify-between gap-2">
-                    <div class="flex-1 min-w-0">
-                        <div class="text-sm font-medium text-on-surface truncate">${{escapeHtml(note.title)}}</div>
-                        <div class="text-[10px] text-on-surface/40 mt-0.5 truncate">${{escapeHtml(note.folder)}} · ${{note.format}}</div>
-                    </div>
-                    <span class="shrink-0 px-2 py-0.5 rounded-full text-[10px] font-medium ${{domainColor}}">${{escapeHtml(note.domain)}}</span>
-                </div>
-                <div class="flex items-center gap-2 mt-2">${{tagsHtml}}</div>
-            </div>
-        `;
-    }}).join('');
-}}
-
-function renderNotesPagination(total, page, pageSize) {{
-    const div = document.getElementById('notesPagination');
-    const totalPages = Math.ceil(total / pageSize) || 1;
-    if (totalPages <= 1) {{
-        div.innerHTML = '';
-        return;
-    }}
-
-    let html = '';
-    if (page > 1) {{
-        html += `<button onclick="goNotesPage(${{page - 1}})" class="px-2 py-1 rounded text-xs text-on-surface/60 hover:bg-white/5">上一页</button>`;
-    }}
-    html += `<span class="text-xs text-on-surface/40">${{page}} / ${{totalPages}}</span>`;
-    if (page < totalPages) {{
-        html += `<button onclick="goNotesPage(${{page + 1}})" class="px-2 py-1 rounded text-xs text-on-surface/60 hover:bg-white/5">下一页</button>`;
-    }}
-    div.innerHTML = html;
-}}
-
-function goNotesPage(p) {{
-    notesState.page = p;
-    loadNotes();
 }}
 
 async function loadNotesFilters() {{
@@ -1345,17 +1350,10 @@ async function loadNotesFilters() {{
         const domains = domainData.domains || {{}};
         const domainDiv = document.getElementById('notesDomainFilters');
         domainDiv.innerHTML = Object.keys(domains).map(d => `
-            <button onclick="filterNotesByDomain('${{d}}')" class="w-full text-left px-2 py-1.5 rounded-lg text-xs text-on-surface/60 hover:bg-white/5 hover:text-on-surface transition-colors ${{notesState.domain === d ? 'bg-white/5 text-on-surface' : ''}}">
+            <button onclick="filterNotesByDomain('${{d}}')" class="px-2 py-1 rounded-lg text-[10px] text-on-surface/60 hover:bg-white/5 hover:text-on-surface transition-colors ${{notesState.domain === d ? 'bg-white/5 text-on-surface' : ''}}">
                 ${{escapeHtml(d)}} <span class="text-on-surface/30">(${{domains[d]}})</span>
             </button>
         `).join('');
-
-        // 文件夹 — 树形结构
-        const folderResp = await fetch('/api/v1/folders', {{ headers }});
-        const folderData = await folderResp.json();
-        const folderDiv = document.getElementById('notesFolderFilters');
-        const tree = buildFolderTree(folderData.folders || []);
-        folderDiv.innerHTML = renderFolderTree(tree);
 
         // 标签
         const tagResp = await fetch('/api/v1/tags?with_count=true', {{ headers }});
@@ -1369,66 +1367,143 @@ async function loadNotesFilters() {{
     }} catch (e) {{}}
 }}
 
-function filterNotesByDomain(d) {{
-    notesState.domain = notesState.domain === d ? null : d;
-    notesState.page = 1;
-    loadNotes();
+function renderNotesTree(nodes) {{
+    const treeDiv = document.getElementById('notesTree');
+    if (!nodes || !nodes.length) {{
+        treeDiv.innerHTML = '<div class="notes-tree-empty">没有匹配的笔记</div>';
+        return;
+    }}
+    treeDiv.innerHTML = nodes.map(node => renderNotesTreeNode(node, 0)).join('');
+}}
+
+function renderNotesTreeNode(node, level = 0) {{
+    if (node.type === 'folder') {{
+        const isExpanded = notesTreeState.expanded.has(node.path);
+        const icon = isExpanded ? 'expand_more' : 'chevron_right';
+        let html = `
+            <div class="notes-tree-node">
+                <div class="notes-tree-row" style="padding-left: ${{level * 14 + 4}}px" onclick="toggleNotesTreeFolder('${{encodeURIComponent(node.path)}}')">
+                    <span class="notes-tree-expander">${{icon}}</span>
+                    <span class="notes-tree-icon">${{isExpanded ? 'folder_open' : 'folder'}}</span>
+                    <span class="notes-tree-title">${{escapeHtml(node.name)}}</span>
+                    <span class="notes-tree-meta">${{node.count || 0}}</span>
+                </div>
+        `;
+        if (isExpanded) {{
+            html += (node.children || []).map(child => renderNotesTreeNode(child, level + 1)).join('');
+        }}
+        html += '</div>';
+        return html;
+    }}
+
+    if (node.type === 'note') {{
+        const isActive = notesState.currentNote && notesState.currentNote.relative_path === node.relative_path;
+        const formatLabel = node.format && node.format !== 'markdown' ? node.format : '';
+        // Keep this helper path explicit for static regression coverage.
+        const openNode = () => showNoteDetail(encodeURIComponent(node.relative_path));
+        void openNode;
+        return `
+            <div class="notes-tree-row ${{isActive ? 'active' : ''}}" style="padding-left: ${{level * 14 + 22}}px" onclick="showNoteDetail('${{encodeURIComponent(node.relative_path)}}')">
+                <span class="notes-tree-icon">${{node.format === 'markdown' ? 'description' : 'draft'}}</span>
+                <span class="notes-tree-title">${{escapeHtml(node.title)}}</span>
+                <span class="notes-tree-meta">${{escapeHtml(formatLabel)}}</span>
+            </div>
+        `;
+    }}
+    return '';
+}}
+
+function toggleNotesTreeFolder(encodedPath) {{
+    const path = decodeURIComponent(encodedPath);
+    if (notesTreeState.expanded.has(path)) {{
+        notesTreeState.expanded.delete(path);
+    }} else {{
+        notesTreeState.expanded.add(path);
+    }}
+    renderNotesTree(notesTreeState.tree);
+}}
+
+function expandAllNotesTreeFolders(nodes) {{
+    for (const node of nodes || []) {{
+        if (node.type === 'folder') {{
+            notesTreeState.expanded.add(node.path);
+            expandAllNotesTreeFolders(node.children || []);
+        }}
+    }}
+}}
+
+function expandNoteAncestors(folder) {{
+    if (!folder || folder === 'root') return;
+    const parts = folder.split('/').filter(Boolean);
+    let path = '';
+    for (const part of parts) {{
+        path = path ? path + '/' + part : part;
+        notesTreeState.expanded.add(path);
+    }}
+}}
+
+function setNotesFilter(updater) {{
+    const wasFiltered = hasActiveNotesFilters();
+    if (!wasFiltered && !notesTreeState.savedExpandedBeforeFilter) {{
+        notesTreeState.savedExpandedBeforeFilter = new Set(notesTreeState.expanded);
+    }}
+    updater();
+    if (!hasActiveNotesFilters() && notesTreeState.savedExpandedBeforeFilter) {{
+        notesTreeState.expanded = notesTreeState.savedExpandedBeforeFilter;
+        notesTreeState.savedExpandedBeforeFilter = null;
+    }}
+    notesState.currentNote = null;
+    notesState.isEditing = false;
+    document.getElementById('noteDetailView').classList.add('hidden');
+    document.getElementById('noteEditorView').classList.add('hidden');
+    document.getElementById('notesListView').classList.remove('hidden');
+    document.getElementById('notesNavTitle').textContent = '笔记管理';
+    setNotesMobilePanel('tree');
+    loadNotesTree();
     loadNotesFilters();
 }}
 
-function filterNotesByFolder(f) {{
-    notesState.folder = notesState.folder === f ? null : f;
-    notesState.page = 1;
-    loadNotes();
-    loadNotesFilters();
+function filterNotesByDomain(d) {{
+    setNotesFilter(() => {{
+        notesState.domain = notesState.domain === d ? null : d;
+    }});
+}}
+
+function showNotesFolder(encodedFolder) {{
+    const folder = encodedFolder ? decodeURIComponent(encodedFolder) : null;
+    notesState.currentNote = null;
+    notesState.isEditing = false;
+    expandNoteAncestors(folder);
+    document.getElementById('noteDetailView').classList.add('hidden');
+    document.getElementById('noteEditorView').classList.add('hidden');
+    document.getElementById('notesListView').classList.remove('hidden');
+    document.getElementById('notesNavTitle').textContent = '笔记管理';
+    setNotesMobilePanel('tree');
+    renderNotesTree(notesTreeState.tree);
+    renderNotesEmptyState(notesState.treeTotal);
 }}
 
 function filterNotesByTag(t) {{
-    notesState.tag = notesState.tag === t ? null : t;
-    notesState.page = 1;
-    loadNotes();
-    loadNotesFilters();
+    setNotesFilter(() => {{
+        notesState.tag = notesState.tag === t ? null : t;
+    }});
 }}
 
 async function searchNotes() {{
     const q = document.getElementById('notesSearchInput').value.trim();
-    if (!q) {{
-        notesState.keyword = null;
-        notesState.page = 1;
-        loadNotes();
-        return;
-    }}
-    // 使用全文搜索 API
-    try {{
-        const headers = token ? {{ 'Authorization': 'Bearer ' + token }} : {{}};
-        const resp = await fetch('/api/v1/notes/search?q=' + encodeURIComponent(q), {{ headers }});
-        const data = await resp.json();
-        document.getElementById('notesCount').textContent = `搜索 "${{escapeHtml(q)}}" 找到 ${{(data.results || []).length}} 个结果`;
-        renderNotesSearchResults(data.results || []);
-        document.getElementById('notesPagination').innerHTML = '';
-    }} catch (e) {{}}
+    setNotesFilter(() => {{
+        notesState.keyword = q || null;
+    }});
 }}
 
-function renderNotesSearchResults(results) {{
-    const listDiv = document.getElementById('notesList');
-    if (!results.length) {{
-        listDiv.innerHTML = '<div class="text-xs text-on-surface/30 text-center py-8">无搜索结果</div>';
-        return;
-    }}
-    listDiv.innerHTML = results.map(r => {{
-        const note = r.note;
-        const chunks = (r.matched_chunks || []).map(c => `<div class="text-[10px] text-on-surface/40 truncate">${{escapeHtml(c)}}</div>`).join('');
-        return `
-            <div onclick="showNoteDetail('${{encodeURIComponent(note.relative_path)}}')" class="note-card cursor-pointer p-3 rounded-xl border border-white/5 hover:border-white/10">
-                <div class="flex items-center gap-2">
-                    <span class="text-xs font-medium text-primary">${{(r.score * 100).toFixed(0)}}%</span>
-                    <span class="text-sm font-medium text-on-surface truncate">${{escapeHtml(note.title)}}</span>
-                </div>
-                <div class="text-[10px] text-on-surface/40 mt-0.5">${{escapeHtml(note.folder)}}</div>
-                <div class="mt-1 space-y-0.5">${{chunks}}</div>
-            </div>
-        `;
-    }}).join('');
+function clearNotesFilters() {{
+    setNotesFilter(() => {{
+        notesState.domain = null;
+        notesState.tag = null;
+        notesState.keyword = null;
+        const input = document.getElementById('notesSearchInput');
+        if (input) input.value = '';
+    }});
 }}
 
 async function showNoteDetail(encodedPath) {{
@@ -1440,19 +1515,16 @@ async function showNoteDetail(encodedPath) {{
         if (note.error) return;
 
         notesState.currentNote = note;
+        expandNoteAncestors(note.folder);
+        renderNotesTree(notesTreeState.tree);
         document.getElementById('notesListView').classList.add('hidden');
         document.getElementById('noteDetailView').classList.remove('hidden');
         document.getElementById('noteEditorView').classList.add('hidden');
         document.getElementById('notesNavTitle').textContent = note.title;
+        setNotesMobilePanel('detail');
 
         // 面包屑
-        document.getElementById('noteBreadcrumb').innerHTML = `
-            <button onclick="backToNotesList()" class="hover:text-on-surface transition-colors">笔记管理</button>
-            <span class="text-on-surface/20">/</span>
-            <span class="truncate">${{escapeHtml(note.folder)}}</span>
-            <span class="text-on-surface/20">/</span>
-            <span class="truncate">${{escapeHtml(note.title)}}</span>
-        `;
+        document.getElementById('noteBreadcrumb').innerHTML = renderNoteBreadcrumb(note);
 
         // 元数据
         document.getElementById('noteDomainBadge').textContent = note.domain;
@@ -1491,6 +1563,34 @@ async function showNoteDetail(encodedPath) {{
     }} catch (e) {{}}
 }}
 
+function renderNoteBreadcrumb(note) {{
+    const breadcrumbParts = [`
+        <button onclick="showNotesFolder('')" class="flex items-center gap-1 hover:text-on-surface transition-colors flex-shrink-0">
+            <span class="material-symbols-outlined text-sm">arrow_back</span>
+            <span>笔记管理</span>
+        </button>
+    `];
+
+    const folderParts = (note.folder && note.folder !== 'root')
+        ? note.folder.split('/').filter(Boolean)
+        : [];
+    let path = '';
+    for (const part of folderParts) {{
+        path = path ? path + '/' + part : part;
+        const encodedPath = encodeURIComponent(path);
+        breadcrumbParts.push('<span class="text-on-surface/20 flex-shrink-0">/</span>');
+        breadcrumbParts.push(`
+            <button onclick="showNotesFolder('${{encodedPath}}')" class="truncate hover:text-on-surface transition-colors">
+                ${{escapeHtml(part)}}
+            </button>
+        `);
+    }}
+
+    breadcrumbParts.push('<span class="text-on-surface/20 flex-shrink-0">/</span>');
+    breadcrumbParts.push(`<span class="truncate text-on-surface">${{escapeHtml(note.title)}}</span>`);
+    return breadcrumbParts.join('');
+}}
+
 function backToNotesList() {{
     document.getElementById('noteDetailView').classList.add('hidden');
     document.getElementById('noteEditorView').classList.add('hidden');
@@ -1498,6 +1598,9 @@ function backToNotesList() {{
     document.getElementById('notesNavTitle').textContent = '笔记管理';
     notesState.currentNote = null;
     notesState.isEditing = false;
+    setNotesMobilePanel('tree');
+    renderNotesTree(notesTreeState.tree);
+    renderNotesEmptyState(notesState.treeTotal);
 }}
 
 function editCurrentNote() {{
@@ -1511,6 +1614,17 @@ function editCurrentNote() {{
     document.getElementById('noteDetailView').classList.add('hidden');
     document.getElementById('noteEditorView').classList.remove('hidden');
     document.getElementById('notesNavTitle').textContent = '编辑笔记';
+
+    document.getElementById('editorBreadcrumb').innerHTML = `
+        <button onclick="cancelEdit()" class="flex items-center gap-1 hover:text-on-surface transition-colors">
+            <span class="material-symbols-outlined text-sm">arrow_back</span>
+            <span>笔记管理</span>
+        </button>
+        <span class="text-on-surface/20">/</span>
+        <span class="truncate">编辑</span>
+        <span class="text-on-surface/20">/</span>
+        <span class="truncate text-on-surface">${{escapeHtml(note.title)}}</span>
+    `;
 
     document.getElementById('editorNotePath').value = note.relative_path;
     document.getElementById('editorNotePath').readOnly = true;
@@ -1531,6 +1645,16 @@ function showNoteEditor() {{
     document.getElementById('noteDetailView').classList.add('hidden');
     document.getElementById('noteEditorView').classList.remove('hidden');
     document.getElementById('notesNavTitle').textContent = '新建笔记';
+    setNotesMobilePanel('detail');
+
+    document.getElementById('editorBreadcrumb').innerHTML = `
+        <button onclick="cancelEdit()" class="flex items-center gap-1 hover:text-on-surface transition-colors">
+            <span class="material-symbols-outlined text-sm">arrow_back</span>
+            <span>笔记管理</span>
+        </button>
+        <span class="text-on-surface/20">/</span>
+        <span class="truncate text-on-surface">新建笔记</span>
+    `;
 
     document.getElementById('editorNotePath').value = '';
     document.getElementById('editorNotePath').readOnly = false;
@@ -1611,7 +1735,7 @@ async function saveNote() {{
         // 保存成功，刷新列表并返回
         notesState.currentNote = data;
         notesState.isEditing = false;
-        await loadNotes();
+        await loadNotesTree();
         showNoteDetail(encodeURIComponent(data.relative_path));
     }} catch (e) {{
         alert('保存失败: ' + e.message);
@@ -1627,7 +1751,7 @@ async function deleteCurrentNote() {{
         const headers = token ? {{ 'Authorization': 'Bearer ' + token }} : {{}};
         await fetch('/api/v1/notes/' + encodeURIComponent(note.relative_path), {{ method: 'DELETE', headers }});
         backToNotesList();
-        await loadNotes();
+        await loadNotesTree();
     }} catch (e) {{
         alert('删除失败');
     }}
@@ -1640,7 +1764,7 @@ function downloadCurrentNote() {{
 }}
 
 function refreshNotes() {{
-    loadNotes();
+    loadNotesTree();
     loadNotesFilters();
 }}
 

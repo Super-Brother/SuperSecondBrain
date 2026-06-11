@@ -56,6 +56,30 @@ class NoteListResponse(BaseModel):
     items: list[NoteMetadata]
 
 
+class NoteTreeNode(BaseModel):
+    """笔记树节点（文件夹或笔记）"""
+
+    type: str
+    name: str | None = None
+    path: str | None = None
+    count: int | None = None
+    children: list["NoteTreeNode"] | None = None
+    title: str | None = None
+    relative_path: str | None = None
+    folder: str | None = None
+    domain: str | None = None
+    tags: list[str] | None = None
+    date: str | None = None
+    format: str | None = None
+
+
+class NoteTreeResponse(BaseModel):
+    """笔记树响应"""
+
+    total: int
+    tree: list[NoteTreeNode]
+
+
 class NoteSearchResult(BaseModel):
     """笔记搜索结果"""
 

@@ -15,6 +15,7 @@ from src.api.notes import (
     update_note,
     delete_note,
     search_notes,
+    list_notes_tree,
     list_folders,
     list_tags,
     safe_path,
@@ -23,6 +24,7 @@ from src.models.notes import (
     NoteCreateRequest,
     NoteUpdateRequest,
     NoteListResponse,
+    NoteTreeResponse,
     NoteDetail,
     FolderListResponse,
     TagListResponse,
@@ -85,6 +87,28 @@ async def api_list_notes(
         AuditAction.NOTE_SEARCH,
         request,
         details={"action": "list", "folder": folder, "domain": domain, "keyword": keyword},
+    )
+    return result
+
+
+@router.get("/notes/tree", response_model=NoteTreeResponse, response_model_exclude_none=True)
+async def api_list_notes_tree(
+    request: Request,
+    domain: str | None = Query(None, description="按领域过滤"),
+    tag: str | None = Query(None, description="按标签过滤"),
+    keyword: str | None = Query(None, description="按标题关键词过滤"),
+):
+    """列出笔记树（文件夹 + 笔记混合层级）"""
+    result = list_notes_tree(
+        VAULT_PATH,
+        domain=domain,
+        tag=tag,
+        keyword=keyword,
+    )
+    audit_log(
+        AuditAction.NOTE_SEARCH,
+        request,
+        details={"action": "tree", "domain": domain, "tag": tag, "keyword": keyword},
     )
     return result
 
@@ -207,7 +231,7 @@ async def api_list_folders(request: Request):
     return {"folders": folders}
 
 
-@router.get("/tags", response_model=TagListResponse)
+@router.get("/tags", response_model=TagListResponse, response_model_exclude_none=True)
 async def api_list_tags(request: Request, with_count: bool = Query(True)):
     """列出所有标签（默认带使用次数）"""
     tags = list_tags(VAULT_PATH)
