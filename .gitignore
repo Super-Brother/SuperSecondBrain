@@ -15,3 +15,5 @@ data
 # 本地模型文件（大体积，不提交到 git）
 models/*
 !models/.gitkeep
+
+node_modules
