@@ -331,7 +331,9 @@ body {{ font-family: 'Inter', sans-serif; -webkit-tap-highlight-color: transpare
             <!-- 左侧 Explorer：文件夹 + 笔记混合树 -->
             <div id="notesLeftSidebar" class="w-full md:w-80 self-stretch border-r border-white/5 bg-surface-container/40 flex flex-col">
                 <div class="p-3 border-b border-white/5 space-y-2">
-                    <input id="notesSearchInput" type="text" placeholder="搜索笔记..." onkeydown="if(event.key==='Enter')searchNotes()" class="w-full bg-surface-container-high border-none text-on-surface rounded-lg py-2 px-3 text-sm placeholder-on-surface/40">
+                    <button id="notesSearchInput" type="button" onclick="openNotesSearchModal()" class="w-full bg-surface-container-high border-none text-on-surface rounded-lg py-2 px-3 text-sm text-left text-on-surface/40 hover:text-on-surface/70 transition-colors">
+                        搜索笔记...
+                    </button>
                     <div class="flex items-center justify-between">
                         <span id="notesTreeSummary" class="text-[11px] text-on-surface/45">加载中...</span>
                         <button onclick="clearNotesFilters()" class="text-[11px] text-on-surface/40 hover:text-on-surface">清除筛选</button>
@@ -537,6 +539,20 @@ body {{ font-family: 'Inter', sans-serif; -webkit-tap-highlight-color: transpare
                 </div>
             </div>
         </div>
+    </div>
+</div>
+
+<!-- ============ 笔记搜索弹窗 ============ -->
+<div id="notesSearchOverlay" onclick="closeNotesSearchModal()" class="fixed inset-0 bg-black/60 z-40 hidden backdrop-blur-sm"></div>
+<div id="notesSearchModal" class="fixed left-1/2 top-[12vh] -translate-x-1/2 z-50 w-[calc(100vw-24px)] max-w-2xl bg-surface-container rounded-2xl border border-white/10 shadow-2xl hidden flex-col max-h-[76vh]">
+    <div class="p-4 border-b border-white/5 flex items-center gap-3 flex-shrink-0">
+        <span class="material-symbols-outlined text-on-surface/40">search</span>
+        <input id="notesSearchModalInput" type="text" placeholder="搜索标题、路径和正文..." oninput="scheduleNotesModalSearch()" onkeydown="handleNotesSearchKeydown(event)" class="flex-1 bg-transparent border-none focus:ring-0 text-on-surface text-sm placeholder-on-surface/35">
+        <button onclick="closeNotesSearchModal()" class="material-symbols-outlined text-on-surface/50 hover:text-on-surface transition-colors">close</button>
+    </div>
+    <div id="notesSearchStatus" class="px-4 py-2 text-[11px] text-on-surface/40 border-b border-white/5">输入关键词开始搜索</div>
+    <div id="notesSearchResults" class="flex-1 overflow-y-auto p-2 scrollbar-hide">
+        <div class="notes-tree-empty">输入关键词开始搜索</div>
     </div>
 </div>
 
@@ -819,6 +835,7 @@ async function newChat() {{
         currentSessionId = data.session_id;
         document.getElementById('currentSessionTitle').textContent = '新对话';
         renderWelcomeMessage();
+        showChatView();
         await loadSessions();
         if (window.innerWidth < 768) toggleHistoryDrawer();
     }} catch(e) {{}}
@@ -1290,6 +1307,11 @@ let notesTreeState = {{
     savedExpandedBeforeFilter: null,
 }};
 
+let notesSearchState = {{
+    timer: null,
+    requestId: 0,
+}};
+
 function hasActiveNotesFilters() {{
     return Boolean(notesState.domain || notesState.tag || notesState.keyword);
 }}
@@ -1536,10 +1558,149 @@ function filterNotesByTag(t) {{
 }}
 
 async function searchNotes() {{
-    const q = document.getElementById('notesSearchInput').value.trim();
-    setNotesFilter(() => {{
-        notesState.keyword = q || null;
+    openNotesSearchModal();
+}}
+
+function openNotesSearchModal() {{
+    const overlay = document.getElementById('notesSearchOverlay');
+    const modal = document.getElementById('notesSearchModal');
+    const input = document.getElementById('notesSearchModalInput');
+    const sidebarTrigger = document.getElementById('notesSearchInput');
+    overlay.classList.remove('hidden');
+    modal.classList.remove('hidden');
+    modal.classList.add('flex');
+    if (input && sidebarTrigger && sidebarTrigger.value) {{
+        input.value = sidebarTrigger.value;
+    }}
+    setTimeout(() => input && input.focus(), 0);
+    scheduleNotesModalSearch();
+}}
+
+function closeNotesSearchModal() {{
+    document.getElementById('notesSearchOverlay').classList.add('hidden');
+    document.getElementById('notesSearchModal').classList.add('hidden');
+    document.getElementById('notesSearchModal').classList.remove('flex');
+}}
+
+function handleNotesSearchKeydown(event) {{
+    if (event.key === 'Escape') {{
+        closeNotesSearchModal();
+    }}
+    if (event.key === 'Enter') {{
+        event.preventDefault();
+        runNotesModalSearch();
+    }}
+}}
+
+function scheduleNotesModalSearch() {{
+    clearTimeout(notesSearchState.timer);
+    notesSearchState.timer = setTimeout(runNotesModalSearch, 250);
+}}
+
+async function runNotesModalSearch() {{
+    const input = document.getElementById('notesSearchModalInput');
+    const status = document.getElementById('notesSearchStatus');
+    const resultsDiv = document.getElementById('notesSearchResults');
+    const query = input ? input.value.trim() : '';
+
+    if (!query) {{
+        status.textContent = '输入关键词开始搜索';
+        resultsDiv.innerHTML = '<div class="notes-tree-empty">输入关键词开始搜索</div>';
+        return;
+    }}
+
+    const requestId = ++notesSearchState.requestId;
+    status.textContent = '搜索中...';
+    resultsDiv.innerHTML = '<div class="notes-tree-empty">搜索中...</div>';
+
+    const headers = token ? {{ 'Authorization': 'Bearer ' + token }} : {{}};
+    const titleUrl = '/api/v1/notes?keyword=' + encodeURIComponent(query) + '&page_size=10';
+    const contentUrl = '/api/v1/notes/search?q=' + encodeURIComponent(query) + '&top_k=10';
+
+    const [titleResp, contentResp] = await Promise.allSettled([
+        fetch(titleUrl, {{ headers }}),
+        fetch(contentUrl, {{ headers }}),
+    ]);
+
+    if (requestId !== notesSearchState.requestId) return;
+
+    let titleResults = [];
+    let contentResults = [];
+    let contentUnavailable = false;
+
+    if (titleResp.status === 'fulfilled' && titleResp.value.ok) {{
+        const data = await titleResp.value.json();
+        titleResults = data.items || [];
+    }}
+
+    if (contentResp.status === 'fulfilled' && contentResp.value.ok) {{
+        const data = await contentResp.value.json();
+        contentResults = data.results || [];
+    }} else {{
+        contentUnavailable = true;
+    }}
+
+    renderNotesSearchResults(query, titleResults, contentResults, contentUnavailable);
+}}
+
+function renderNotesSearchResults(query, titleResults, contentResults, contentUnavailable) {{
+    const status = document.getElementById('notesSearchStatus');
+    const resultsDiv = document.getElementById('notesSearchResults');
+    const seen = new Set();
+    let html = '';
+
+    const titleMatches = (titleResults || []).filter(note => {{
+        if (!note.relative_path || seen.has(note.relative_path)) return false;
+        seen.add(note.relative_path);
+        return true;
     }});
+
+    const contentMatches = (contentResults || []).filter(result => {{
+        const note = result.note || {{}};
+        if (!note.relative_path || seen.has(note.relative_path)) return false;
+        seen.add(note.relative_path);
+        return true;
+    }});
+
+    if (titleMatches.length) {{
+        html += '<div class="px-2 pb-1 text-[10px] font-bold text-on-surface/40 uppercase tracking-wider">标题和路径</div>';
+        html += titleMatches.map(note => renderNotesSearchResultItem(note, null, '标题匹配')).join('');
+    }}
+
+    if (contentMatches.length) {{
+        html += '<div class="px-2 pt-3 pb-1 text-[10px] font-bold text-on-surface/40 uppercase tracking-wider">正文内容</div>';
+        html += contentMatches.map(result => renderNotesSearchResultItem(result.note, result.matched_chunks, `相关度 ${{Math.round((result.score || 0) * 100)}}%`)).join('');
+    }}
+
+    if (!html) {{
+        html = `<div class="notes-tree-empty">没有找到和「${{escapeHtml(query)}}」相关的笔记</div>`;
+    }}
+
+    if (contentUnavailable) {{
+        html += '<div class="px-3 py-2 text-[11px] text-yellow-300/70">全文搜索暂不可用，已显示标题和路径匹配结果。</div>';
+    }}
+
+    status.textContent = `找到 ${{titleMatches.length + contentMatches.length}} 条结果`;
+    resultsDiv.innerHTML = html;
+}}
+
+function renderNotesSearchResultItem(note, chunks, meta) {{
+    const snippet = chunks && chunks.length ? chunks[0] : note.relative_path;
+    return `
+        <button onclick="openNoteFromSearch('${{encodeURIComponent(note.relative_path)}}')" class="w-full text-left px-3 py-2.5 rounded-xl hover:bg-white/5 transition-colors">
+            <div class="flex items-center gap-2">
+                <span class="material-symbols-outlined text-sm text-on-surface/40">${{note.format === 'markdown' ? 'description' : 'draft'}}</span>
+                <span class="text-sm font-medium text-on-surface/85 truncate">${{escapeHtml(note.title || note.relative_path)}}</span>
+                <span class="text-[10px] text-on-surface/35 flex-shrink-0">${{escapeHtml(meta || '')}}</span>
+            </div>
+            <div class="mt-1 text-[11px] text-on-surface/40 line-clamp-2">${{escapeHtml(snippet || '')}}</div>
+        </button>
+    `;
+}}
+
+function openNoteFromSearch(encodedPath) {{
+    closeNotesSearchModal();
+    showNoteDetail(encodedPath);
 }}
 
 function clearNotesFilters() {{
@@ -1547,7 +1708,7 @@ function clearNotesFilters() {{
         notesState.domain = null;
         notesState.tag = null;
         notesState.keyword = null;
-        const input = document.getElementById('notesSearchInput');
+        const input = document.getElementById('notesSearchModalInput');
         if (input) input.value = '';
     }});
 }}

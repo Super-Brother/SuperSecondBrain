@@ -36,3 +36,32 @@ def test_session_management_ui_includes_rename_archive_and_restore_actions():
     assert "PATCH" in HTML_TEMPLATE
     assert "?archived=" in HTML_TEMPLATE
     assert "确定要删除会话" in HTML_TEMPLATE
+
+
+def test_new_chat_switches_back_to_chat_view_from_notes_view():
+    start = HTML_TEMPLATE.index("async function newChat()")
+    end = HTML_TEMPLATE.index("function renderWelcomeMessage()", start)
+    new_chat_body = HTML_TEMPLATE[start:end]
+
+    assert "showChatView();" in new_chat_body
+    assert "renderWelcomeMessage();" in new_chat_body
+
+
+def test_notes_search_uses_modal_instead_of_tree_keyword_filter():
+    assert 'id="notesSearchModal"' in HTML_TEMPLATE
+    assert 'id="notesSearchModalInput"' in HTML_TEMPLATE
+    assert "function openNotesSearchModal()" in HTML_TEMPLATE
+    assert "function closeNotesSearchModal()" in HTML_TEMPLATE
+    assert "async function runNotesModalSearch()" in HTML_TEMPLATE
+    assert "function renderNotesSearchResults(" in HTML_TEMPLATE
+    assert "function openNoteFromSearch(" in HTML_TEMPLATE
+
+    assert "/api/v1/notes?keyword=" in HTML_TEMPLATE
+    assert "/api/v1/notes/search?q=" in HTML_TEMPLATE
+
+    start = HTML_TEMPLATE.index("async function searchNotes()")
+    end = HTML_TEMPLATE.index("function clearNotesFilters()", start)
+    search_notes_body = HTML_TEMPLATE[start:end]
+    assert "openNotesSearchModal();" in search_notes_body
+    assert "setNotesFilter" not in search_notes_body
+    assert "notesState.keyword" not in search_notes_body
