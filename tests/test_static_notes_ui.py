@@ -57,7 +57,7 @@ def test_notes_search_uses_modal_instead_of_tree_keyword_filter():
     assert "function openNoteFromSearch(" in HTML_TEMPLATE
 
     assert "/api/v1/notes?keyword=" in HTML_TEMPLATE
-    assert "/api/v1/notes/search?q=" in HTML_TEMPLATE
+    assert "/api/v1/notes/keyword-search?q=" in HTML_TEMPLATE
 
     start = HTML_TEMPLATE.index("async function searchNotes()")
     end = HTML_TEMPLATE.index("function clearNotesFilters()", start)

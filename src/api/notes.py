@@ -8,7 +8,9 @@
 """
 
 import re
+from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 import yaml
 from fastapi import HTTPException
@@ -539,6 +541,128 @@ def search_notes(pipeline_obj, query: str, top_k: int = 20, domain_filter: str |
         }
 
     return list(seen.values())
+
+
+def _extract_keyword_snippets(content: str, keyword: str, radius: int = 80) -> list[str]:
+    """从正文中提取包含关键词的文本片段
+
+    截取关键词前后各 radius 个字符，并在截断处添加省略号。
+    """
+    if not content or not keyword:
+        return []
+
+    kw_lower = keyword.lower()
+    text_lower = content.lower()
+    snippets = []
+    start = 0
+
+    while len(snippets) < 2:
+        idx = text_lower.find(kw_lower, start)
+        if idx == -1:
+            break
+
+        snippet_start = max(0, idx - radius)
+        snippet_end = min(len(content), idx + len(keyword) + radius)
+        snippet = content[snippet_start:snippet_end]
+
+        if snippet_start > 0:
+            snippet = "..." + snippet
+        if snippet_end < len(content):
+            snippet = snippet + "..."
+
+        snippets.append(snippet)
+        start = idx + len(keyword)
+
+    return snippets
+
+
+def _parse_note_date(value) -> Optional[datetime]:
+    """把笔记日期字段统一解析为 datetime，用于排序"""
+    if value is None:
+        return None
+    if hasattr(value, "isoformat"):
+        return value
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def search_notes_by_keyword(
+    vault_path: str,
+    query: str,
+    top_k: int = 20,
+) -> list[dict]:
+    """纯关键词搜索：匹配标题或正文，结果按日期倒序
+
+    不依赖向量索引和 Reranker，直接扫描 vault 文件内容做字符串匹配。
+    标题命中时不再读取正文，标题未命中时才读取正文提取片段。
+    """
+    vault = Path(vault_path).resolve()
+    if not vault.exists():
+        return []
+
+    keyword = query.strip().lower()
+    if not keyword:
+        return []
+
+    metadata_list = scan_note_metadata(vault_path)
+    md_parser = ObsidianParser(vault_path)
+    router = DocumentRouter(use_obsidian=True)
+
+    matches = []
+
+    for meta in metadata_list:
+        rel_path = meta["relative_path"]
+        file_path = vault / rel_path
+        title = meta.get("title", "") or ""
+        matched_chunks: list[str] = []
+        matched = False
+
+        # 标题命中：直接加入，片段用标题即可
+        if keyword in title.lower():
+            matched = True
+            matched_chunks = [f"标题匹配: {title}"]
+
+        # 标题未命中时读取正文继续匹配
+        if not matched:
+            try:
+                if meta.get("format") == "markdown":
+                    note = md_parser.parse_file(str(file_path))
+                    content = note.content
+                else:
+                    doc = router.parse_file(str(file_path))
+                    content = doc.content if doc else ""
+            except Exception:
+                content = ""
+
+            if keyword in content.lower():
+                matched = True
+                matched_chunks = _extract_keyword_snippets(content, keyword)
+
+        if not matched:
+            continue
+
+        matches.append({
+            "score": 0.0,
+            "note": {
+                "title": title,
+                "relative_path": rel_path,
+                "folder": meta.get("folder", ""),
+                "domain": meta.get("domain", ""),
+                "tags": meta.get("tags", []),
+                "date": meta.get("date"),
+                "content_hash": meta.get("content_hash", ""),
+                "outbound_links": meta.get("outbound_links", []),
+                "headings": meta.get("headings", []),
+                "format": meta.get("format", "markdown"),
+            },
+            "matched_chunks": matched_chunks,
+        })
+
+    # 按日期降序排列，无日期放最后
+    matches.sort(key=lambda item: _parse_note_date(item["note"].get("date")) or datetime.min, reverse=True)
+    return matches[:top_k]
 
 
 # ---- 浏览 ----

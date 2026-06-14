@@ -15,6 +15,7 @@ from src.api.notes import (
     update_note,
     delete_note,
     search_notes,
+    search_notes_by_keyword,
     list_notes_tree,
     list_folders,
     list_tags,
@@ -50,7 +51,7 @@ async def api_search_notes(
     top_k: int = Query(20, ge=1, le=50, description="返回结果数"),
     domain: str | None = Query(None, description="领域过滤"),
 ):
-    """全文搜索笔记"""
+    """全文搜索笔记（RAG 向量检索）"""
     # 延迟导入 pipeline，避免循环引用
     from src.api.app import pipeline as app_pipeline
 
@@ -59,6 +60,22 @@ async def api_search_notes(
         AuditAction.NOTE_SEARCH,
         request,
         details={"action": "search", "query": q, "domain": domain},
+    )
+    return {"results": results}
+
+
+@router.get("/notes/keyword-search")
+async def api_search_notes_by_keyword(
+    request: Request,
+    q: str = Query(..., min_length=1, description="搜索关键词"),
+    top_k: int = Query(20, ge=1, le=50, description="返回结果数"),
+):
+    """关键词搜索笔记（标题 + 正文，按时间倒序）"""
+    results = search_notes_by_keyword(VAULT_PATH, q, top_k=top_k)
+    audit_log(
+        AuditAction.NOTE_SEARCH,
+        request,
+        details={"action": "keyword_search", "query": q, "count": len(results)},
     )
     return {"results": results}
 

@@ -353,6 +353,47 @@ class TestSearchNotes:
             assert d["results"][0]["score"] == 0.85
 
 
+class TestKeywordSearchNotes:
+    """测试关键词搜索（标题 + 正文，按时间倒序）"""
+
+    def test_keyword_search_hit_title(self, client):
+        r = client.get("/api/v1/notes/keyword-search?q=测试笔记")
+        assert r.status_code == 200
+        d = r.json()
+        assert len(d["results"]) >= 1
+        assert any(item["note"]["relative_path"] == "测试笔记.md" for item in d["results"])
+
+    def test_keyword_search_hit_content(self, client):
+        r = client.get("/api/v1/notes/keyword-search?q=测试内容")
+        assert r.status_code == 200
+        d = r.json()
+        assert len(d["results"]) >= 1
+        paths = [item["note"]["relative_path"] for item in d["results"]]
+        assert "测试笔记.md" in paths
+
+    def test_keyword_search_no_result(self, client):
+        r = client.get("/api/v1/notes/keyword-search?q=完全不存在的词")
+        assert r.status_code == 200
+        d = r.json()
+        assert d["results"] == []
+
+    def test_keyword_search_sorted_by_date_desc(self, client):
+        # "内容" 会匹配多篇笔记；有日期的 测试笔记.md 应该排在最前面
+        r = client.get("/api/v1/notes/keyword-search?q=内容")
+        assert r.status_code == 200
+        d = r.json()
+        assert len(d["results"]) >= 2
+        first = d["results"][0]["note"]
+        assert first["relative_path"] == "测试笔记.md"
+        assert first["date"] == "2024-01-01"
+
+    def test_keyword_search_top_k_limit(self, client):
+        r = client.get("/api/v1/notes/keyword-search?q=内容&top_k=1")
+        assert r.status_code == 200
+        d = r.json()
+        assert len(d["results"]) == 1
+
+
 class TestFoldersAndTags:
     """测试文件夹和标签列表"""
 

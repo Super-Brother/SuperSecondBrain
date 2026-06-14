@@ -1615,7 +1615,7 @@ async function runNotesModalSearch() {{
 
     const headers = token ? {{ 'Authorization': 'Bearer ' + token }} : {{}};
     const titleUrl = '/api/v1/notes?keyword=' + encodeURIComponent(query) + '&page_size=10';
-    const contentUrl = '/api/v1/notes/search?q=' + encodeURIComponent(query) + '&top_k=10';
+    const contentUrl = '/api/v1/notes/keyword-search?q=' + encodeURIComponent(query) + '&top_k=20';
 
     const [titleResp, contentResp] = await Promise.allSettled([
         fetch(titleUrl, {{ headers }}),
@@ -1668,8 +1668,8 @@ function renderNotesSearchResults(query, titleResults, contentResults, contentUn
     }}
 
     if (contentMatches.length) {{
-        html += '<div class="px-2 pt-3 pb-1 text-[10px] font-bold text-on-surface/40 uppercase tracking-wider">正文内容</div>';
-        html += contentMatches.map(result => renderNotesSearchResultItem(result.note, result.matched_chunks, `相关度 ${{Math.round((result.score || 0) * 100)}}%`)).join('');
+        html += '<div class="px-2 pt-3 pb-1 text-[10px] font-bold text-on-surface/40 uppercase tracking-wider">正文关键词匹配</div>';
+        html += contentMatches.map(result => renderNotesSearchResultItem(result.note, result.matched_chunks, result.note.date ? escapeHtml(result.note.date) : '关键词匹配')).join('');
     }}
 
     if (!html) {{
