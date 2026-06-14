@@ -1138,6 +1138,16 @@ function escapeHtml(text) {{
     return div.innerHTML;
 }}
 
+function highlightKeyword(text, keyword) {{
+    if (!text || !keyword) return escapeHtml(text || '');
+    const safeText = escapeHtml(text);
+    const safeKeyword = escapeHtml(keyword);
+    const escapeChars = '[' + '.*+?^$' + '{' + '}' + '()|[\\\\]\\\\\\\\' + ']';
+    const specialChars = new RegExp(escapeChars, 'g');
+    const regex = new RegExp('(' + safeKeyword.replace(specialChars, '\\\\$&') + ')', 'gi');
+    return safeText.replace(regex, '<mark class="bg-primary-container/40 text-on-surface rounded px-0.5">$1</mark>');
+}}
+
 function renderSources(sources) {{
     if (!sources || sources.length === 0) return '';
     const filtered = sources.filter(s => (s.score || 0) >= 0.2);
@@ -1310,6 +1320,7 @@ let notesTreeState = {{
 let notesSearchState = {{
     timer: null,
     requestId: 0,
+    lastQuery: '',
 }};
 
 function hasActiveNotesFilters() {{
@@ -1594,7 +1605,7 @@ function handleNotesSearchKeydown(event) {{
 
 function scheduleNotesModalSearch() {{
     clearTimeout(notesSearchState.timer);
-    notesSearchState.timer = setTimeout(runNotesModalSearch, 250);
+    notesSearchState.timer = setTimeout(runNotesModalSearch, 500);
 }}
 
 async function runNotesModalSearch() {{
@@ -1610,6 +1621,7 @@ async function runNotesModalSearch() {{
     }}
 
     const requestId = ++notesSearchState.requestId;
+    notesSearchState.lastQuery = query;
     status.textContent = '搜索中...';
     resultsDiv.innerHTML = '<div class="notes-tree-empty">搜索中...</div>';
 
@@ -1685,15 +1697,17 @@ function renderNotesSearchResults(query, titleResults, contentResults, contentUn
 }}
 
 function renderNotesSearchResultItem(note, chunks, meta) {{
-    const snippet = chunks && chunks.length ? chunks[0] : note.relative_path;
+    const snippetRaw = chunks && chunks.length ? chunks[0] : note.relative_path;
+    const titleHtml = highlightKeyword(note.title || note.relative_path, notesSearchState.lastQuery);
+    const snippetHtml = highlightKeyword(snippetRaw, notesSearchState.lastQuery);
     return `
         <button onclick="openNoteFromSearch('${{encodeURIComponent(note.relative_path)}}')" class="w-full text-left px-3 py-2.5 rounded-xl hover:bg-white/5 transition-colors">
             <div class="flex items-center gap-2">
                 <span class="material-symbols-outlined text-sm text-on-surface/40">${{note.format === 'markdown' ? 'description' : 'draft'}}</span>
-                <span class="text-sm font-medium text-on-surface/85 truncate">${{escapeHtml(note.title || note.relative_path)}}</span>
+                <span class="text-sm font-medium text-on-surface/85 truncate">${{titleHtml}}</span>
                 <span class="text-[10px] text-on-surface/35 flex-shrink-0">${{escapeHtml(meta || '')}}</span>
             </div>
-            <div class="mt-1 text-[11px] text-on-surface/40 line-clamp-2">${{escapeHtml(snippet || '')}}</div>
+            <div class="mt-1 text-[11px] text-on-surface/40 line-clamp-2">${{snippetHtml}}</div>
         </button>
     `;
 }}

@@ -127,18 +127,75 @@ def _parse_generic_meta(router: DocumentRouter, file_path: Path, rel_path: str, 
         }
 
 
+# ---- 缓存 ----
+
+# vault_path -> {"notes_by_path": {rel_path: meta}, "mtimes": {rel_path: mtime}}
+_note_metadata_cache: dict[str, dict] = {}
+
+# (vault_path, rel_path) -> {"content": str, "mtime": float}
+_note_content_cache: dict[tuple[str, str], dict] = {}
+
+
+def _is_cache_valid(cache: dict, current_mtimes: dict[str, float]) -> bool:
+    """检查缓存是否仍然有效：文件未增删改"""
+    cached_mtimes = cache.get("mtimes", {})
+    if set(cached_mtimes.keys()) != set(current_mtimes.keys()):
+        return False
+    return all(cached_mtimes.get(p) == current_mtimes[p] for p in current_mtimes)
+
+
+def _read_note_content(vault_path: str, rel_path: str, meta: dict) -> str:
+    """读取笔记正文，带 mtime 感知的简单缓存"""
+    file_path = Path(vault_path).resolve() / rel_path
+    try:
+        mtime = file_path.stat().st_mtime
+    except Exception:
+        mtime = 0
+
+    cache_key = (vault_path, rel_path)
+    cached = _note_content_cache.get(cache_key)
+    if cached and cached.get("mtime") == mtime:
+        return cached["content"]
+
+    content = ""
+    try:
+        if meta.get("format") == "markdown":
+            parser = ObsidianParser(vault_path)
+            note = parser.parse_file(str(file_path))
+            content = note.content
+        else:
+            router = DocumentRouter(use_obsidian=True)
+            doc = router.parse_file(str(file_path))
+            content = doc.content if doc else ""
+    except Exception:
+        content = ""
+
+    _note_content_cache[cache_key] = {"content": content, "mtime": mtime}
+    return content
+
+
 # ---- 核心 CRUD ----
 
 
 def scan_note_metadata(vault_path: str) -> list[dict]:
-    """扫描 vault 文件系统，返回所有支持格式的笔记元数据"""
+    """扫描 vault 文件系统，返回所有支持格式的笔记元数据
+
+    使用 mtime 感知缓存：只有新增、修改、删除的文件才会被重新解析，
+    未变更文件直接复用上次结果，显著降低连续搜索的 I/O 开销。
+    """
     vault = Path(vault_path).resolve()
     if not vault.exists():
+        _note_metadata_cache.pop(vault_path, None)
         return []
 
     parser = ObsidianParser(vault_path)
     router = DocumentRouter(use_obsidian=True)
-    notes = []
+    cache = _note_metadata_cache.get(vault_path, {"notes_by_path": {}, "mtimes": {}})
+    cached_notes = cache["notes_by_path"]
+    cached_mtimes = cache["mtimes"]
+
+    current_mtimes: dict[str, float] = {}
+    notes_by_path: dict[str, dict] = {}
 
     for ext in SUPPORTED_NOTE_EXTENSIONS:
         for file_path in vault.rglob(f"*{ext}"):
@@ -147,13 +204,32 @@ def scan_note_metadata(vault_path: str) -> list[dict]:
                 continue
 
             rel_path = str(file_path.relative_to(vault))
+            try:
+                mtime = file_path.stat().st_mtime
+            except Exception:
+                mtime = 0
+            current_mtimes[rel_path] = mtime
+
+            # 文件未变更，直接复用缓存
+            if cached_mtimes.get(rel_path) == mtime and rel_path in cached_notes:
+                notes_by_path[rel_path] = cached_notes[rel_path]
+                continue
+
+            # 新增或变更，重新解析
             meta = None
             if ext == ".md":
                 meta = _parse_md_meta(parser, file_path, rel_path, vault_path)
             if meta is None:
                 meta = _parse_generic_meta(router, file_path, rel_path, vault_path)
-            notes.append(meta)
+            notes_by_path[rel_path] = meta
 
+    # 如果缓存中存在已删除的文件，本次已经自然丢弃
+    _note_metadata_cache[vault_path] = {
+        "notes_by_path": notes_by_path,
+        "mtimes": current_mtimes,
+    }
+
+    notes = list(notes_by_path.values())
     notes.sort(key=lambda n: (n["folder"], n["title"]))
     return notes
 
@@ -607,8 +683,6 @@ def search_notes_by_keyword(
         return []
 
     metadata_list = scan_note_metadata(vault_path)
-    md_parser = ObsidianParser(vault_path)
-    router = DocumentRouter(use_obsidian=True)
 
     matches = []
 
@@ -626,15 +700,7 @@ def search_notes_by_keyword(
 
         # 标题未命中时读取正文继续匹配
         if not matched:
-            try:
-                if meta.get("format") == "markdown":
-                    note = md_parser.parse_file(str(file_path))
-                    content = note.content
-                else:
-                    doc = router.parse_file(str(file_path))
-                    content = doc.content if doc else ""
-            except Exception:
-                content = ""
+            content = _read_note_content(vault_path, rel_path, meta)
 
             if keyword in content.lower():
                 matched = True
