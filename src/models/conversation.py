@@ -50,6 +50,18 @@ class ConversationManager:
             self.conn.execute("ALTER TABLE messages ADD COLUMN metadata TEXT")
             self.conn.commit()
 
+        # 迁移 sessions 表的元数据列（标题、归档时间）
+        session_columns = {
+            row["name"]
+            for row in self.conn.execute("PRAGMA table_info(sessions)").fetchall()
+        }
+        if "title" not in session_columns:
+            self.conn.execute("ALTER TABLE sessions ADD COLUMN title TEXT")
+        if "archived_at" not in session_columns:
+            self.conn.execute("ALTER TABLE sessions ADD COLUMN archived_at TEXT")
+        if "title" not in session_columns or "archived_at" not in session_columns:
+            self.conn.commit()
+
     def create_session(self) -> str:
         session_id = str(uuid.uuid4())
         now = datetime.now().isoformat()
@@ -71,6 +83,17 @@ class ConversationManager:
             "UPDATE sessions SET updated_at = ? WHERE session_id = ?",
             (now, session_id),
         )
+        # 第一条用户消息自动生成会话标题，不覆盖手动设置的标题
+        if role == "user":
+            row = self.conn.execute(
+                "SELECT title FROM sessions WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+            if row and not row["title"]:
+                self.conn.execute(
+                    "UPDATE sessions SET title = ? WHERE session_id = ?",
+                    (self._generate_title_from_content(content), session_id),
+                )
         self.conn.commit()
 
     def get_history(self, session_id: str, limit: int = 20) -> list[Message]:
@@ -86,15 +109,27 @@ class ConversationManager:
         self.conn.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
         self.conn.commit()
 
-    def list_sessions(self, limit: int = 50, include_empty: bool = True) -> list[dict]:
+    def list_sessions(
+        self,
+        limit: int = 50,
+        include_empty: bool = True,
+        archived: bool = False,
+    ) -> list[dict]:
         """列出会话，默认保留空会话（新建对话后应立即可见）。"""
         sql = (
-            "SELECT s.session_id, s.created_at, s.updated_at, "
+            "SELECT s.session_id, s.created_at, s.updated_at, s.title, s.archived_at, "
             "(SELECT COUNT(*) FROM messages m WHERE m.session_id = s.session_id) as msg_count "
             "FROM sessions s "
         )
+        conditions = []
         if not include_empty:
-            sql += "WHERE EXISTS (SELECT 1 FROM messages m WHERE m.session_id = s.session_id) "
+            conditions.append("EXISTS (SELECT 1 FROM messages m WHERE m.session_id = s.session_id)")
+        if archived:
+            conditions.append("s.archived_at IS NOT NULL")
+        else:
+            conditions.append("s.archived_at IS NULL")
+        if conditions:
+            sql += "WHERE " + " AND ".join(conditions) + " "
         sql += "ORDER BY s.updated_at DESC LIMIT ?"
         rows = self.conn.execute(sql, (limit,)).fetchall()
         return [dict(r) for r in rows]
@@ -105,6 +140,48 @@ class ConversationManager:
             (session_id,),
         ).fetchone()
         return row[0] if row else 0
+
+    def rename_session(self, session_id: str, title: str):
+        """手动重命名会话标题，空标题会被拒绝。"""
+        title = title.strip()
+        if not title:
+            raise ValueError("会话名称不能为空")
+        if len(title) > 40:
+            title = title[:40]
+        now = datetime.now().isoformat()
+        self.conn.execute(
+            "UPDATE sessions SET title = ?, updated_at = ? WHERE session_id = ?",
+            (title, now, session_id),
+        )
+        self.conn.commit()
+
+    def archive_session(self, session_id: str):
+        """归档会话，使其不再出现在默认活跃列表中。"""
+        now = datetime.now().isoformat()
+        self.conn.execute(
+            "UPDATE sessions SET archived_at = ?, updated_at = ? WHERE session_id = ?",
+            (now, now, session_id),
+        )
+        self.conn.commit()
+
+    def restore_session(self, session_id: str):
+        """恢复已归档会话到活跃列表。"""
+        now = datetime.now().isoformat()
+        self.conn.execute(
+            "UPDATE sessions SET archived_at = NULL, updated_at = ? WHERE session_id = ?",
+            (now, session_id),
+        )
+        self.conn.commit()
+
+    def _generate_title_from_content(self, content: str) -> str:
+        """从用户第一条消息生成本地会话标题。"""
+        title = " ".join(content.split())
+        title = title.strip(" \t\r\n，。！？!?：:；;、")
+        if not title:
+            return "新对话"
+        if len(title) > 20:
+            return title[:20] + "..."
+        return title
 
     def get_history_slice(self, session_id: str, offset: int = 0, limit: int = 20) -> list[Message]:
         rows = self.conn.execute(

@@ -271,6 +271,11 @@ class SessionResponse(BaseModel):
     session_id: str
 
 
+class SessionUpdateRequest(BaseModel):
+    title: str | None = None
+    archived: bool | None = None
+
+
 class FeedbackRequest(BaseModel):
     session_id: str
     query: str
@@ -414,8 +419,22 @@ async def create_session():
 
 
 @app.get("/api/v1/sessions")
-async def list_sessions(limit: int = 50):
-    return {"sessions": conv_manager.list_sessions(limit=limit)}
+async def list_sessions(limit: int = 50, archived: bool = False):
+    return {"sessions": conv_manager.list_sessions(limit=limit, archived=archived)}
+
+
+@app.patch("/api/v1/sessions/{session_id}")
+async def update_session(session_id: str, body: SessionUpdateRequest):
+    if body.title is not None:
+        title = body.title.strip()
+        if not title:
+            return JSONResponse(status_code=400, content={"error": "会话名称不能为空"})
+        conv_manager.rename_session(session_id, title)
+    if body.archived is True:
+        conv_manager.archive_session(session_id)
+    elif body.archived is False:
+        conv_manager.restore_session(session_id)
+    return {"status": "ok"}
 
 
 @app.delete("/api/v1/sessions/{session_id}")

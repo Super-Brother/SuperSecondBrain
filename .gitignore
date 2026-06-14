@@ -17,3 +17,5 @@ models/*
 !models/.gitkeep
 
 node_modules
+/docs
+.codegraph

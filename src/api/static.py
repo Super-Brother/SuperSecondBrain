@@ -544,6 +544,7 @@ body {{ font-family: 'Inter', sans-serif; -webkit-tap-highlight-color: transpare
 const API_BASE = '';
 let currentSessionId = null;
 let sessions = [];
+let sessionArchiveFilter = 'active';
 let token = localStorage.getItem('sb_token');
 let isLoggedIn = false;
 
@@ -745,7 +746,8 @@ function logout() {{
 async function loadSessions() {{
     try {{
         const headers = token ? {{ 'Authorization': 'Bearer ' + token }} : {{}};
-        const resp = await fetch('/api/v1/sessions', {{ headers }});
+        const archived = sessionArchiveFilter === 'archived';
+        const resp = await fetch('/api/v1/sessions?archived=' + archived, {{ headers }});
         if (!resp.ok) {{
             console.error('加载会话列表失败:', resp.status, resp.statusText);
             return;
@@ -758,25 +760,51 @@ async function loadSessions() {{
     }}
 }}
 
+function getSessionTitle(s) {{
+    if (s.title && s.title.trim()) return s.title;
+    if (!s.msg_count) return '新对话';
+    return '对话 ' + s.session_id.slice(0, 8);
+}}
+
+function setSessionArchiveFilter(filter) {{
+    sessionArchiveFilter = filter;
+    loadSessions();
+}}
+
 function renderSessions() {{
     const list = document.getElementById('sessionList');
+    const filterHtml = `
+        <div class="flex gap-1 px-2 mb-2">
+            <button onclick="setSessionArchiveFilter('active')" class="flex-1 text-[10px] font-medium py-1 rounded-lg transition-colors ${{sessionArchiveFilter === 'active' ? 'bg-primary/20 text-primary' : 'text-on-surface/50 hover:bg-white/5'}}">活跃</button>
+            <button onclick="setSessionArchiveFilter('archived')" class="flex-1 text-[10px] font-medium py-1 rounded-lg transition-colors ${{sessionArchiveFilter === 'archived' ? 'bg-primary/20 text-primary' : 'text-on-surface/50 hover:bg-white/5'}}">已归档</button>
+        </div>
+    `;
+
     if (!sessions.length) {{
-        list.innerHTML = '<div class="text-xs text-on-surface/30 text-center py-8">暂无历史对话</div>';
+        list.innerHTML = filterHtml + '<div class="text-xs text-on-surface/30 text-center py-8">暂无历史对话</div>';
         return;
     }}
 
-    list.innerHTML = sessions.map(s => {{
+    list.innerHTML = filterHtml + sessions.map(s => {{
         const isActive = s.session_id === currentSessionId;
         const time = new Date(s.updated_at).toLocaleDateString('zh-CN', {{ month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }});
+        const isArchived = sessionArchiveFilter === 'archived';
         return `
             <div onclick="loadSession('${{s.session_id}}')" class="group cursor-pointer px-3 py-2.5 rounded-xl ${{isActive ? 'bg-primary/10' : 'hover:bg-white/5'}} transition-colors">
                 <div class="flex items-center gap-2">
                     <span class="material-symbols-outlined text-sm text-on-surface/40">chat_bubble</span>
                     <div class="flex-1 min-w-0">
-                        <div class="text-xs font-medium truncate ${{isActive ? 'text-primary' : 'text-on-surface/80'}}">对话 ${{s.session_id.slice(0,8)}}</div>
+                        <div class="text-xs font-medium truncate ${{isActive ? 'text-primary' : 'text-on-surface/80'}}">${{escapeHtml(getSessionTitle(s))}}</div>
                         <div class="text-[10px] text-on-surface/40">${{time}} · ${{s.msg_count}} 条消息</div>
                     </div>
-                    <button onclick="event.stopPropagation(); deleteSession('${{s.session_id}}')" class="opacity-0 group-hover:opacity-100 material-symbols-outlined text-xs text-on-surface/40 hover:text-red-400 transition-opacity">delete</button>
+                    <div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button onclick="event.stopPropagation(); renameSession('${{s.session_id}}')" class="material-symbols-outlined text-xs text-on-surface/40 hover:text-primary transition-colors">edit</button>
+                        ${{isArchived
+                            ? `<button onclick="event.stopPropagation(); restoreSession('${{s.session_id}}')" class="material-symbols-outlined text-xs text-on-surface/40 hover:text-green-400 transition-colors">unarchive</button>`
+                            : `<button onclick="event.stopPropagation(); archiveSession('${{s.session_id}}')" class="material-symbols-outlined text-xs text-on-surface/40 hover:text-yellow-400 transition-colors">archive</button>`
+                        }}
+                        <button onclick="event.stopPropagation(); deleteSession('${{s.session_id}}')" class="material-symbols-outlined text-xs text-on-surface/40 hover:text-red-400 transition-colors">delete</button>
+                    </div>
                 </div>
             </div>
         `;
@@ -790,28 +818,32 @@ async function newChat() {{
         const data = await resp.json();
         currentSessionId = data.session_id;
         document.getElementById('currentSessionTitle').textContent = '新对话';
-        // 重置为欢迎消息
-        document.getElementById('messages').innerHTML = `
-            <div class="max-w-2xl mx-auto flex flex-col gap-3">
-                <div class="flex items-center gap-2">
-                    <div class="w-7 h-7 rounded-full bg-primary-container flex items-center justify-center">
-                        <span class="material-symbols-outlined text-xs text-white">psychology</span>
-                    </div>
-                    <span class="text-xs font-medium text-on-surface/50">AI Assistant</span>
-                </div>
-                <div class="bg-surface-container-low p-4 rounded-xl text-on-surface text-sm leading-relaxed border-l-2 border-primary/30">
-                    你好！我是 SecondBrain Chat，基于你的知识库回答问题。试试问我点什么吧！
-                </div>
-            </div>
-        `;
+        renderWelcomeMessage();
         await loadSessions();
         if (window.innerWidth < 768) toggleHistoryDrawer();
     }} catch(e) {{}}
 }}
 
+function renderWelcomeMessage() {{
+    document.getElementById('messages').innerHTML = `
+        <div class="max-w-2xl mx-auto flex flex-col gap-3">
+            <div class="flex items-center gap-2">
+                <div class="w-7 h-7 rounded-full bg-primary-container flex items-center justify-center">
+                    <span class="material-symbols-outlined text-xs text-white">psychology</span>
+                </div>
+                <span class="text-xs font-medium text-on-surface/50">AI Assistant</span>
+            </div>
+            <div class="bg-surface-container-low p-4 rounded-xl text-on-surface text-sm leading-relaxed border-l-2 border-primary/30">
+                你好！我是 SecondBrain Chat，基于你的知识库回答问题。试试问我点什么吧！
+            </div>
+        </div>
+    `;
+}}
+
 async function loadSession(sessionId) {{
     currentSessionId = sessionId;
-    document.getElementById('currentSessionTitle').textContent = '对话 ' + sessionId.slice(0,8);
+    const session = sessions.find(s => s.session_id === sessionId);
+    document.getElementById('currentSessionTitle').textContent = session ? getSessionTitle(session) : '对话 ' + sessionId.slice(0,8);
     renderSessions();
 
     // 加载历史消息
@@ -825,20 +857,7 @@ async function loadSession(sessionId) {{
         const messages = data.messages || [];
 
         if (messages.length === 0) {{
-            // 显示欢迎消息
-            messagesDiv.innerHTML = `
-                <div class="max-w-2xl mx-auto flex flex-col gap-3">
-                    <div class="flex items-center gap-2">
-                        <div class="w-7 h-7 rounded-full bg-primary-container flex items-center justify-center">
-                            <span class="material-symbols-outlined text-xs text-white">psychology</span>
-                        </div>
-                        <span class="text-xs font-medium text-on-surface/50">AI Assistant</span>
-                    </div>
-                    <div class="bg-surface-container-low p-4 rounded-xl text-on-surface text-sm leading-relaxed border-l-2 border-primary/30">
-                        你好！我是 SecondBrain Chat，基于你的知识库回答问题。试试问我点什么吧！
-                    </div>
-                </div>
-            `;
+            renderWelcomeMessage();
         }} else {{
             // 渲染历史消息（无动画、无光标）
             for (const msg of messages) {{
@@ -863,45 +882,68 @@ async function loadSession(sessionId) {{
             scrollMessagesToBottom();
         }}
     }} catch(e) {{
-        // 加载失败时显示欢迎消息
-        messagesDiv.innerHTML = `
-            <div class="max-w-2xl mx-auto flex flex-col gap-3">
-                <div class="flex items-center gap-2">
-                    <div class="w-7 h-7 rounded-full bg-primary-container flex items-center justify-center">
-                        <span class="material-symbols-outlined text-xs text-white">psychology</span>
-                    </div>
-                    <span class="text-xs font-medium text-on-surface/50">AI Assistant</span>
-                </div>
-                <div class="bg-surface-container-low p-4 rounded-xl text-on-surface text-sm leading-relaxed border-l-2 border-primary/30">
-                    你好！我是 SecondBrain Chat，基于你的知识库回答问题。试试问我点什么吧！
-                </div>
-            </div>
-        `;
+        renderWelcomeMessage();
     }}
 
     if (window.innerWidth < 768) toggleHistoryDrawer();
 }}
 
+async function patchSession(sessionId, payload) {{
+    const headers = token
+        ? {{ 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' }}
+        : {{ 'Content-Type': 'application/json' }};
+    const resp = await fetch('/api/v1/sessions/' + sessionId, {{
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify(payload),
+    }});
+    if (!resp.ok) {{
+        const data = await resp.json().catch(() => ({{}}));
+        throw new Error(data.error || '会话更新失败');
+    }}
+}}
+
+async function renameSession(sessionId) {{
+    const session = sessions.find(s => s.session_id === sessionId);
+    const currentTitle = session ? getSessionTitle(session) : '';
+    const title = prompt('重命名会话', currentTitle);
+    if (title === null) return;
+    const trimmed = title.trim();
+    if (!trimmed) {{
+        alert('会话名称不能为空');
+        return;
+    }}
+    await patchSession(sessionId, {{ title: trimmed }});
+    if (currentSessionId === sessionId) {{
+        document.getElementById('currentSessionTitle').textContent = trimmed;
+    }}
+    await loadSessions();
+}}
+
+async function archiveSession(sessionId) {{
+    await patchSession(sessionId, {{ archived: true }});
+    if (currentSessionId === sessionId) {{
+        currentSessionId = null;
+        document.getElementById('currentSessionTitle').textContent = '新对话';
+        renderWelcomeMessage();
+    }}
+    await loadSessions();
+}}
+
+async function restoreSession(sessionId) {{
+    await patchSession(sessionId, {{ archived: false }});
+    await loadSessions();
+}}
+
 async function deleteSession(sessionId) {{
+    if (!confirm('确定要删除会话吗？此操作不可恢复。')) return;
     try {{
         const headers = token ? {{ 'Authorization': 'Bearer ' + token }} : {{}};
         await fetch('/api/v1/sessions/' + sessionId, {{ method: 'DELETE', headers }});
         if (currentSessionId === sessionId) {{
             currentSessionId = null;
             document.getElementById('currentSessionTitle').textContent = '新对话';
-            document.getElementById('messages').innerHTML = `
-                <div class="max-w-2xl mx-auto flex flex-col gap-3">
-                    <div class="flex items-center gap-2">
-                        <div class="w-7 h-7 rounded-full bg-primary-container flex items-center justify-center">
-                            <span class="material-symbols-outlined text-xs text-white">psychology</span>
-                        </div>
-                        <span class="text-xs font-medium text-on-surface/50">AI Assistant</span>
-                    </div>
-                    <div class="bg-surface-container-low p-4 rounded-xl text-on-surface text-sm leading-relaxed border-l-2 border-primary/30">
-                        你好！我是 SecondBrain Chat，基于你的知识库回答问题。试试问我点什么吧！
-                    </div>
-                </div>
-            `;
+            renderWelcomeMessage();
         }}
         await loadSessions();
     }} catch(e) {{}}
@@ -1217,6 +1259,10 @@ async function send() {{
         }}
 
         await loadSessions();
+        const current = sessions.find(s => s.session_id === currentSessionId);
+        if (current) {{
+            document.getElementById('currentSessionTitle').textContent = getSessionTitle(current);
+        }}
 
     }} catch(e) {{
         addMessage('assistant', '❌ 请求失败: ' + e.message, null, {{ showCursor: false }});

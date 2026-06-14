@@ -25,6 +25,10 @@ def client():
         }
         mock_conv.create_session.return_value = "test-session-id"
         mock_conv.get_history.return_value = []
+        mock_conv.rename_session.return_value = None
+        mock_conv.archive_session.return_value = None
+        mock_conv.restore_session.return_value = None
+        mock_conv.list_sessions.return_value = []
 
         from src.api.app import app
         with TestClient(app) as c:
@@ -60,6 +64,29 @@ class TestSessionEndpoints:
     def test_delete_session(self, client):
         r = client.delete("/api/v1/sessions/test-session-id")
         assert r.status_code == 200
+
+    def test_list_sessions_supports_archived_filter(self, client):
+        r = client.get("/api/v1/sessions?archived=true")
+        assert r.status_code == 200
+
+    def test_update_session_title(self, client):
+        r = client.patch("/api/v1/sessions/test-session-id", json={"title": "项目复盘"})
+        assert r.status_code == 200
+        assert r.json()["status"] == "ok"
+
+    def test_update_session_rejects_empty_title(self, client):
+        r = client.patch("/api/v1/sessions/test-session-id", json={"title": "   "})
+        assert r.status_code == 400
+
+    def test_archive_session(self, client):
+        r = client.patch("/api/v1/sessions/test-session-id", json={"archived": True})
+        assert r.status_code == 200
+        assert r.json()["status"] == "ok"
+
+    def test_restore_session(self, client):
+        r = client.patch("/api/v1/sessions/test-session-id", json={"archived": False})
+        assert r.status_code == 200
+        assert r.json()["status"] == "ok"
 
     def test_get_session_messages_includes_sources(self, client, monkeypatch):
         from src.api import app as app_module
