@@ -62,11 +62,15 @@ docker-compose -f docker-compose.full.yml up -d
 | ② 在线检索 | `Query改写+脱敏 → Hybrid检索(向量+BM25) → 权限过滤 → CrossEncoder Rerank` | ✅ 完整实现 |
 | ③ 生成 | `Prompt构建(上下文+历史) → LLM生成 → 答案脱敏 → 带来源引用返回` | ✅ 完整实现 |
 
-**已知缺口（按优先级排序）：**
-1. **多轮对话压缩** — 历史只取最近 20 条，无摘要压缩机制，长对话易超上下文窗口
-2. **分布式缓存** — `ResponseCache` 为内存 LRU，无 Redis 后端
-3. **限流熔断** — 无 API rate limiting，LLM 调用费用不可控
-4. **日志审计** — 只有基础 access log，无操作审计和 ELK 聚合
+**已解决缺口：**
+1. ✅ **多轮对话压缩** — `_get_history()` limit=100，超过 20 条时调用 `summarize_conversation()` 生成摘要并压缩早期对话
+2. ✅ **分布式缓存** — `RedisCache` 支持 TTL、键前缀、连接健康检查；Redis 故障自动回退到内存 `ResponseCache`
+3. ✅ **限流熔断** — slowapi 限流（Redis 存储后端）+ `CircuitBreaker` 三态熔断器 + LLM 调用超时（30s）
+4. ✅ **日志审计** — `Logger` 支持 RotatingFileHandler + JSON 结构化格式；`AuditLogger`（SQLite）覆盖关键操作；请求中间件增强（X-Request-ID、IP、User-Agent、Metrics）
+5. ✅ **用户认证体系** — `APIKeyMiddleware` 解析 `Authorization: Bearer <token>` 并注入 `request.state.user`；保持向后兼容
+6. ✅ **对话摘要熔断保护** — `summarize_conversation()` 已接入独立 `CircuitBreaker`
+7. ✅ **Metrics 持久化与告警** — `MetricsCollector` 持久化到 SQLite；新增 Prometheus `/metrics` 端点；`/stats` 返回 `alerts`
+8. ✅ **索引版本管理与灰度** — `IndexVersionManager` 支持多版本索引、原子切换、自动清理和回滚
 
 ### 核心流水线 (src/retrievers/pipeline.py)
 

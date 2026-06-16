@@ -2,8 +2,6 @@
 
 import json
 import logging
-import os
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -60,59 +58,52 @@ class TestJSONFormatter:
 class TestSetupLogger:
     """日志初始化测试"""
 
-    def test_returns_logger(self):
+    def test_returns_logger(self, tmp_path, monkeypatch):
         """应返回 logging.Logger 实例"""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            os.chdir(tmpdir)
-            logger = setup_logger("test_logger_1")
-            assert isinstance(logger, logging.Logger)
-            assert logger.name == "test_logger_1"
+        monkeypatch.chdir(tmp_path)
+        logger = setup_logger("test_logger_1")
+        assert isinstance(logger, logging.Logger)
+        assert logger.name == "test_logger_1"
 
-    def test_singleton_pattern(self):
+    def test_singleton_pattern(self, tmp_path, monkeypatch):
         """同一名字应返回同一实例"""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            os.chdir(tmpdir)
-            logger1 = setup_logger("test_singleton")
-            logger2 = setup_logger("test_singleton")
-            assert logger1 is logger2
+        monkeypatch.chdir(tmp_path)
+        logger1 = setup_logger("test_singleton")
+        logger2 = setup_logger("test_singleton")
+        assert logger1 is logger2
 
-    def test_log_level_from_env(self):
+    def test_log_level_from_env(self, tmp_path, monkeypatch):
         """LOG_LEVEL 环境变量应生效"""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            os.chdir(tmpdir)
-            os.environ["LOG_LEVEL"] = "DEBUG"
-            logger = setup_logger("test_level")
-            assert logger.level == logging.DEBUG
-            del os.environ["LOG_LEVEL"]
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("LOG_LEVEL", "DEBUG")
+        logger = setup_logger("test_level")
+        assert logger.level == logging.DEBUG
 
-    def test_log_file_created(self):
+    def test_log_file_created(self, tmp_path, monkeypatch):
         """日志文件应被创建"""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            os.chdir(tmpdir)
-            logger = setup_logger("test_file")
-            logger.info("测试写入文件")
+        monkeypatch.chdir(tmp_path)
+        logger = setup_logger("test_file")
+        logger.info("测试写入文件")
 
-            log_file = Path("data/logs/secondbrain.log")
-            assert log_file.exists()
-            content = log_file.read_text()
-            assert "测试写入文件" in content
+        log_file = Path("data/logs/secondbrain.log")
+        assert log_file.exists()
+        content = log_file.read_text()
+        assert "测试写入文件" in content
 
-    def test_json_format_from_env(self):
+    def test_json_format_from_env(self, tmp_path, monkeypatch):
         """LOG_FORMAT=json 时应输出 JSON"""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            os.chdir(tmpdir)
-            os.environ["LOG_FORMAT"] = "json"
-            logger = setup_logger("test_json")
-            # 使用 StringIO 捕获输出
-            import io
-            stream = io.StringIO()
-            handler = logging.StreamHandler(stream)
-            handler.setFormatter(logger.handlers[0].formatter)
-            logger.handlers.clear()
-            logger.addHandler(handler)
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("LOG_FORMAT", "json")
+        logger = setup_logger("test_json")
+        # 使用 StringIO 捕获输出
+        import io
+        stream = io.StringIO()
+        handler = logging.StreamHandler(stream)
+        handler.setFormatter(logger.handlers[0].formatter)
+        logger.handlers.clear()
+        logger.addHandler(handler)
 
-            logger.info("JSON 测试")
-            output = stream.getvalue().strip()
-            parsed = json.loads(output)
-            assert parsed["message"] == "JSON 测试"
-            del os.environ["LOG_FORMAT"]
+        logger.info("JSON 测试")
+        output = stream.getvalue().strip()
+        parsed = json.loads(output)
+        assert parsed["message"] == "JSON 测试"
