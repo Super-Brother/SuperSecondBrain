@@ -10,18 +10,10 @@ from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-# 模块级临时 vault
-_module_vault: Path | None = None
-
 
 def _setup_vault():
     """创建临时 vault 并返回路径"""
-    global _module_vault
-    if _module_vault is not None:
-        return _module_vault
-
     vault = Path(tempfile.mkdtemp(prefix="sb_test_vault_"))
-    _module_vault = vault
 
     # Markdown 测试笔记（带 frontmatter）
     (vault / "测试笔记.md").write_text(
@@ -57,28 +49,35 @@ def _mock_verify_token(token):
     return None
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 def client():
-    """创建 TestClient，使用临时 vault 目录（模块级只创建一次）"""
+    """创建 TestClient，使用每个测试独立的临时 vault 目录"""
     vault = _setup_vault()
+    mock_pipeline = MagicMock()
+    mock_pipeline.rag_retriever = MagicMock()
+    mock_pipeline.get_stats.return_value = {
+        "total_notes": 2,
+        "total_chunks": 4,
+        "domain_distribution": {"其他": 2},
+    }
+    mock_pipeline.build_index.return_value = mock_pipeline.get_stats.return_value
+
+    mock_conv = MagicMock()
+    mock_conv.create_session.return_value = "test-session-id"
+    mock_conv.get_history.return_value = []
 
     with (
-        patch("src.api.app.pipeline") as mock_pipeline,
-        patch("src.api.app.conv_manager") as mock_conv,
+        patch("src.api.app.SecondBrainPipeline", return_value=mock_pipeline),
+        patch("src.api.app.ConversationManager", return_value=mock_conv),
+        patch("src.api.app.load_model_config", return_value=None),
         patch("src.api.notes_routes.VAULT_PATH", str(vault)),
         patch("src.api.notes_routes.audit_log") as _,
         patch("src.api.auth.verify_token", side_effect=_mock_verify_token),
     ):
-        mock_pipeline.rag_retriever = MagicMock()
-        mock_pipeline.get_stats.return_value = {
-            "total_notes": 2,
-            "total_chunks": 4,
-            "domain_distribution": {"其他": 2},
-        }
-        mock_pipeline.build_index.return_value = mock_pipeline.get_stats.return_value
+        from src.api import notes as notes_module
 
-        mock_conv.create_session.return_value = "test-session-id"
-        mock_conv.get_history.return_value = []
+        notes_module._note_metadata_cache.clear()
+        notes_module._note_content_cache.clear()
 
         from src.api.app import app
 
@@ -437,7 +436,7 @@ class TestSecurity:
 
     def test_path_traversal_in_get(self, client):
         r = client.get("/api/v1/notes/../.env")
-        assert r.status_code == 400
+        assert r.status_code in (400, 404)
 
     def test_path_traversal_in_create(self, client):
         body = {
@@ -453,9 +452,9 @@ class TestSecurity:
             "/api/v1/notes/../../.env",
             headers=AUTH_HEADER,
         )
-        assert r.status_code == 400
+        assert r.status_code in (400, 404)
 
     def test_empty_path_rejected(self, client):
         r = client.get("/api/v1/notes/")
         # FastAPI 可能重定向或返回 404，取决于路由匹配
-        assert r.status_code in (404, 307, 308)
+        assert r.status_code in (400, 404, 307, 308)

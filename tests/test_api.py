@@ -13,24 +13,34 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 @pytest.fixture
 def client():
-    with patch("src.api.app.pipeline") as mock_pipeline, \
-         patch("src.api.app.conv_manager") as mock_conv:
-        mock_pipeline.rag_retriever = MagicMock()
-        mock_pipeline.get_stats.return_value = {
-            "total_notes": 100, "total_chunks": 200,
-            "domain_distribution": {"通识": 180},
-        }
-        mock_pipeline.chat.return_value = {
-            "answer": "测试回答", "sources": [], "query": "测试问题",
-        }
-        mock_conv.create_session.return_value = "test-session-id"
-        mock_conv.get_history.return_value = []
-        mock_conv.rename_session.return_value = None
-        mock_conv.archive_session.return_value = None
-        mock_conv.restore_session.return_value = None
-        mock_conv.list_sessions.return_value = []
+    mock_pipeline = MagicMock()
+    mock_pipeline.rag_retriever = MagicMock()
+    mock_pipeline.get_stats.return_value = {
+        "total_notes": 100, "total_chunks": 200,
+        "domain_distribution": {"通识": 180},
+    }
+    mock_pipeline.chat.return_value = {
+        "answer": "测试回答", "sources": [], "query": "测试问题",
+    }
 
+    mock_conv = MagicMock()
+    mock_conv.create_session.return_value = "test-session-id"
+    mock_conv.get_history.return_value = []
+    mock_conv.rename_session.return_value = None
+    mock_conv.archive_session.return_value = None
+    mock_conv.restore_session.return_value = None
+    mock_conv.list_sessions.return_value = []
+
+    mock_cache = MagicMock()
+    mock_cache.get.return_value = None
+
+    with patch("src.api.app.SecondBrainPipeline", return_value=mock_pipeline), \
+         patch("src.api.app.ConversationManager", return_value=mock_conv), \
+         patch("src.api.app.load_model_config", return_value=None), \
+         patch("src.api.app.RedisCache"), \
+         patch("src.api.app.ResponseCache", return_value=mock_cache):
         from src.api.app import app
+
         with TestClient(app) as c:
             yield c
 

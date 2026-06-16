@@ -70,15 +70,6 @@ docker-compose -f docker-compose.full.yml up -d
 5. ✅ **用户认证体系** — `APIKeyMiddleware` 始终解析 `Authorization: Bearer <token>` 并注入 `request.state.user`；保持向后兼容（无 API_KEY 时允许匿名访问）；审计日志可正确关联用户身份
 6. ✅ **对话摘要熔断保护** — `summarize_conversation()` 已接入 `CircuitBreaker`
 7. ✅ **Metrics 持久化与告警** — `MetricsCollector` 计数器/Token 使用量持久化到 SQLite（重启自动恢复）；新增 Prometheus `/metrics` 端点；支持环境变量配置告警阈值（P95/P99 延迟、错误率），`/stats` 返回中包含 `alerts` 字段
-
-**已解决缺口：**
-1. ✅ **多轮对话压缩** — `_get_history()` limit=100，超过 20 条时调用 `summarize_conversation()` 生成摘要并压缩早期对话
-2. ✅ **分布式缓存** — `RedisCache` 支持 TTL、键前缀、连接健康检查；Redis 故障自动回退到内存 `ResponseCache`
-3. ✅ **限流熔断** — slowapi 限流（Redis 存储后端）+ `CircuitBreaker` 三态熔断器 + LLM 调用超时（30s）
-4. ✅ **日志审计** — `Logger` 支持 RotatingFileHandler + JSON 结构化格式；`AuditLogger`（SQLite）覆盖 8 个关键操作；请求中间件增强（X-Request-ID、IP、User-Agent、Metrics）
-5. ✅ **用户认证体系** — `APIKeyMiddleware` 始终解析 `Authorization: Bearer <token>` 并注入 `request.state.user`；保持向后兼容（无 API_KEY 时允许匿名访问）；审计日志可正确关联用户身份
-6. ✅ **对话摘要熔断保护** — `summarize_conversation()` 已接入 `CircuitBreaker`
-7. ✅ **Metrics 持久化与告警** — `MetricsCollector` 计数器/Token 使用量持久化到 SQLite（重启自动恢复）；新增 Prometheus `/metrics` 端点；支持环境变量配置告警阈值（P95/P99 延迟、错误率），`/stats` 返回中包含 `alerts` 字段
 8. ✅ **索引版本管理与灰度** — `IndexVersionManager` 支持多版本索引并存（`data/index/versions/` 目录结构）；`build_index.py --versioned` 创建新版本并原子切换；保留最近 N 个版本自动清理；`/api/v1/index/versions|switch|rollback` 端点支持查看/切换/回滚；向后兼容旧版无版本化索引
 
 ### 核心流水线 (src/retrievers/pipeline.py)
