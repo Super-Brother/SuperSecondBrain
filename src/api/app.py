@@ -6,6 +6,14 @@ import os
 # macOS MPS 内存分配器在模型预热时可能触发段错误，完全禁用 MPS 避免崩溃
 os.environ.setdefault("PYTORCH_MPS_HIGH_WATERMARK_RATIO", "0.0")
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+# 避免 huggingface/tokenizers 在 fork 后启用并行导致死锁/段错误
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+# Apple Silicon 上使用 MPS 加速 embedding；SentenceTransformer 启动时会读取该变量
+os.environ.setdefault("EMBEDDING_DEVICE", "mps")
+# 增量重建时避免语义切分对每个句子计算 embedding，确保快速完成
+os.environ.setdefault("SPLIT_STRATEGY", "legacy")
+# 控制 embedding batch size
+os.environ.setdefault("EMBEDDING_BATCH_SIZE", "64")
 
 faulthandler.enable()
 
@@ -27,7 +35,6 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # 在国内服务器部署时，强制使用 HuggingFace 镜像，避免模型下载被墙
-import os
 if not os.getenv("HF_ENDPOINT"):
     os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 

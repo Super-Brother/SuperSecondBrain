@@ -10,6 +10,16 @@ import os
 # macOS MPS 内存分配器在模型预热时可能触发段错误，完全禁用 MPS 避免崩溃
 os.environ.setdefault("PYTORCH_MPS_HIGH_WATERMARK_RATIO", "0.0")
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+# 避免 huggingface/tokenizers 在 fork 后启用并行导致死锁/段错误
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+# 限制 OpenMP 线程数，避免 CPU 上 embedding 时线程同步开销过大
+os.environ.setdefault("OMP_NUM_THREADS", "4")
+# 全量重建时使用 legacy 切分策略，避免语义切分对每个句子计算 embedding 导致极慢
+os.environ.setdefault("SPLIT_STRATEGY", "legacy")
+# 增大 embedding batch size，提升 CPU 上编码吞吐量
+os.environ.setdefault("EMBEDDING_BATCH_SIZE", "64")
+# 在 Apple Silicon 上尝试使用 MPS 加速 embedding（失败会自动报错，可改回 cpu）
+os.environ.setdefault("EMBEDDING_DEVICE", "mps")
 
 # 关键：在 jieba 等多线程库之前先初始化 torch，
 # 避免 PyTorch 线程状态与 jieba 多线程冲突导致的段错误 (macOS)
@@ -41,8 +51,8 @@ def main():
     config = PipelineConfig(
         vault_path=vault_path,
         index_dir=index_dir,
-        chunk_size=512,
-        chunk_overlap=100,
+        chunk_size=1024,
+        chunk_overlap=200,
         versioned=args.versioned,
     )
 

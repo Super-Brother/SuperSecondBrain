@@ -129,7 +129,11 @@ class SecondBrainPipeline:
         return self._stats
 
     def _build_index_incremental(self, parser, chunk_size: int):
-        """增量构建索引：只处理新增/变更的文件"""
+        """增量构建索引：只处理新增/变更的文件
+
+        优化后：若已有索引加载在内存中，只对新 chunks 计算 Embedding 并追加，
+        删除时仅重建必要的部分；否则回退到全量重建（首次构建/索引损坏）。
+        """
         manifest_path = os.path.join(self.config.index_dir, "manifest.json")
         manifest = {}
         if os.path.exists(manifest_path):
@@ -144,23 +148,54 @@ class SecondBrainPipeline:
             print("✅ 无变更，跳过索引重建")
             return self._stats
 
-        # 需要重建：过滤掉删除的旧 chunks + 加入新 chunks
+        deleted_set = set(deleted)
+
+        # 切分变更文档
         print(f"✂️  切分变更文档...")
         new_docs = split_notes_to_documents(
             changed_notes, chunk_size=chunk_size, chunk_overlap=self.config.chunk_overlap,
         )
         print(f"📝 新增 {len(new_docs)} 个 chunks")
 
-        # 加载旧 documents，过滤删除的
-        old_docs = []
-        docs_path = os.path.join(self.config.index_dir, "documents.pkl")
-        if os.path.exists(docs_path):
-            with open(docs_path, "rb") as f:
-                old_docs = pickle.load(f)
+        # 判断是否能走真正增量路径
+        can_incremental = (
+            self.vector_retriever is not None
+            and self.bm25_retriever is not None
+            and os.path.exists(os.path.join(self.config.index_dir, "faiss.index"))
+            and os.path.exists(os.path.join(self.config.index_dir, "documents.pkl"))
+        )
 
-        deleted_set = set(deleted)
-        filtered_old = [d for d in old_docs if d.metadata.get("relative_path", "") not in deleted_set]
-        all_docs = filtered_old + new_docs
+        if can_incremental:
+            # 真正增量：先删除，再追加
+            if deleted_set:
+                print(f"🗑️  删除 {len(deleted_set)} 个旧文件对应的 chunks...")
+                vector_removed = self.vector_retriever.remove_documents_by_relative_paths(deleted_set)
+                bm25_removed = self.bm25_retriever.remove_documents_by_relative_paths(deleted_set)
+                print(f"🗑️  向量索引删除 {vector_removed} 个 chunks，BM25 删除 {bm25_removed} 个")
+
+            if new_docs:
+                print(f"➕ 追加 {len(new_docs)} 个新 chunks 到现有索引...")
+                self.vector_retriever.add_documents(new_docs)
+                self.bm25_retriever.add_documents(new_docs)
+
+            all_docs = self.vector_retriever.documents
+        else:
+            # 回退：加载旧 documents，过滤删除的，与新增合并后全量重建
+            print("⚠️  未检测到已加载索引，回退到全量重建...")
+            old_docs = []
+            docs_path = os.path.join(self.config.index_dir, "documents.pkl")
+            if os.path.exists(docs_path):
+                with open(docs_path, "rb") as f:
+                    old_docs = pickle.load(f)
+
+            filtered_old = [d for d in old_docs if d.metadata.get("relative_path", "") not in deleted_set]
+            all_docs = filtered_old + new_docs
+
+            self.vector_retriever = VectorRetriever()
+            self.vector_retriever.build_index(all_docs)
+
+            self.bm25_retriever = BM25Retriever()
+            self.bm25_retriever.build_index(all_docs)
 
         from collections import Counter
         domains = Counter(doc.metadata["domain"] for doc in all_docs)
@@ -169,13 +204,6 @@ class SecondBrainPipeline:
             "total_chunks": len(all_docs),
             "domain_distribution": dict(domains.most_common()),
         }
-
-        # 重建索引
-        self.vector_retriever = VectorRetriever()
-        self.vector_retriever.build_index(all_docs)
-
-        self.bm25_retriever = BM25Retriever()
-        self.bm25_retriever.build_index(all_docs)
 
         self.hybrid_retriever = HybridRetriever(self.vector_retriever, self.bm25_retriever)
         self.rag_retriever = RAGRetriever(self.hybrid_retriever)

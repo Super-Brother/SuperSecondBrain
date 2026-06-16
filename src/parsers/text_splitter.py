@@ -7,6 +7,7 @@
     docs = split_notes_to_documents(notes, splitter=splitter)
 """
 
+import os
 import re
 from dataclasses import dataclass
 from typing import Literal
@@ -715,7 +716,8 @@ def split_notes_to_documents(
 ) -> list[Document]:
     """批量切分多篇笔记"""
     if splitter is None:
-        splitter = create_text_splitter("markdown", chunk_size, chunk_overlap)
+        strategy = os.getenv("SPLIT_STRATEGY", "markdown")
+        splitter = create_text_splitter(strategy, chunk_size, chunk_overlap)
 
     all_docs: list[Document] = []
     for note in notes:

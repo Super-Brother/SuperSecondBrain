@@ -14,9 +14,14 @@ import pickle
 from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
+
+# macOS 上必须先初始化 torch，再导入 faiss/jieba，
+# 避免 PyTorch 线程状态与 faiss/jieba 多线程冲突导致的段错误
+import torch  # noqa: F401
+
 import faiss
 import jieba
-import numpy as np
 from rank_bm25 import BM25Okapi
 
 from langchain_core.documents import Document
@@ -81,7 +86,8 @@ class VectorRetriever:
         """构建向量索引"""
         print(f"[VectorRetriever] 正在对 {len(documents)} 个 chunks 做 Embedding...")
         texts = [doc.page_content for doc in documents]
-        embeddings = self.embedder.encode(texts, show_progress_bar=True, batch_size=64)
+        batch_size = int(os.getenv("EMBEDDING_BATCH_SIZE", "64"))
+        embeddings = self.embedder.encode(texts, show_progress_bar=True, batch_size=batch_size)
 
         if self.embedding_dim is None:
             self.embedding_dim = embeddings.shape[1]
@@ -90,6 +96,27 @@ class VectorRetriever:
         self.store.add_documents(documents, embeddings=embeddings.tolist())
         stats = self.store.get_stats()
         print(f"[VectorRetriever] 索引构建完成，共 {stats.get('total_vectors', 0)} 个向量")
+
+    def add_documents(self, documents: list[Document]):
+        """仅对新文档计算 Embedding 并追加到现有索引"""
+        if not documents:
+            return
+
+        print(f"[VectorRetriever] 正在对 {len(documents)} 个新增 chunks 做 Embedding...")
+        texts = [doc.page_content for doc in documents]
+        batch_size = int(os.getenv("EMBEDDING_BATCH_SIZE", "64"))
+        embeddings = self.embedder.encode(texts, show_progress_bar=True, batch_size=batch_size)
+
+        if self.embedding_dim is None:
+            self.embedding_dim = embeddings.shape[1]
+
+        self.store.add_documents(documents, embeddings=embeddings.tolist())
+        stats = self.store.get_stats()
+        print(f"[VectorRetriever] 追加完成，共 {stats.get('total_vectors', 0)} 个向量")
+
+    def remove_documents_by_relative_paths(self, relative_paths: set[str]) -> int:
+        """删除指定 relative_path 的文档"""
+        return self.store.remove_documents_by_relative_paths(relative_paths)
 
     def search(
         self,
@@ -158,6 +185,41 @@ class BM25Retriever:
         ]
         self.bm25 = BM25Okapi(self.tokenized_corpus)
         print(f"[BM25Retriever] 索引构建完成，共 {len(documents)} 个文档")
+
+    def add_documents(self, documents: list[Document]):
+        """追加 BM25 文档；已有 index 时增量扩展 corpus"""
+        if not documents:
+            return
+
+        if self.bm25 is None:
+            self.build_index(documents)
+            return
+
+        self.documents.extend(documents)
+        new_tokens = [list(jieba.cut(doc.page_content)) for doc in documents]
+        self.tokenized_corpus.extend(new_tokens)
+        self.bm25 = BM25Okapi(self.tokenized_corpus)
+        print(f"[BM25Retriever] 追加完成，共 {len(self.documents)} 个文档")
+
+    def remove_documents_by_relative_paths(self, relative_paths: set[str]) -> int:
+        """删除文档后重建 BM25 index"""
+        if not relative_paths or not self.documents:
+            return 0
+
+        keep = [
+            (doc, tokens)
+            for doc, tokens in zip(self.documents, self.tokenized_corpus)
+            if doc.metadata.get("relative_path", "") not in relative_paths
+        ]
+        removed_count = len(self.documents) - len(keep)
+        if removed_count == 0:
+            return 0
+
+        self.documents = [doc for doc, _ in keep]
+        self.tokenized_corpus = [tokens for _, tokens in keep]
+        self.bm25 = BM25Okapi(self.tokenized_corpus) if self.tokenized_corpus else None
+        print(f"[BM25Retriever] 删除 {removed_count} 个文档，剩余 {len(self.documents)} 个")
+        return removed_count
 
     def search(
         self,

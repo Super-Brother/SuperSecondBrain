@@ -135,6 +135,29 @@ class MilvusVectorStore(VectorStore):
         )
         return result.get("delete_count", 0)
 
+    def remove_documents_by_relative_paths(self, relative_paths: set[str]) -> int:
+        """按 relative_path 删除文档
+
+        Milvus 中 doc_id 字段存储的是 relative_path，因此按 doc_id 批量删除。
+        """
+        if not relative_paths or not self.documents:
+            return 0
+
+        path_list = list(relative_paths)
+        # Milvus 表达式长度有限制，分批删除
+        batch_size = 100
+        deleted_count = 0
+        for i in range(0, len(path_list), batch_size):
+            batch = path_list[i : i + batch_size]
+            deleted_count += self.delete_by_filter({"doc_id": batch})
+
+        self.documents = [
+            d
+            for d in self.documents
+            if d.metadata.get("relative_path", "") not in relative_paths
+        ]
+        return deleted_count
+
     def search(
         self,
         query_embedding: list[float] | None = None,

@@ -43,6 +43,21 @@ class TestBM25Retriever:
         for doc, _ in results:
             assert doc.metadata["domain"] == "AI/ML"
 
+    def test_add_and_remove_documents(self, sample_docs):
+        retriever = BM25Retriever()
+        retriever.build_index(sample_docs[:3])
+        assert len(retriever.documents) == 3
+
+        retriever.add_documents(sample_docs[3:])
+        assert len(retriever.documents) == 5
+        assert retriever.bm25 is not None
+
+        removed = retriever.remove_documents_by_relative_paths({"py.md", "java.md"})
+        assert removed == 2
+        assert len(retriever.documents) == 3
+        remaining_paths = {d.metadata["relative_path"] for d in retriever.documents}
+        assert remaining_paths == {"ml.md", "dl.md", "git.md"}
+
 
 class TestVectorRetriever:
     def test_build_and_search(self, sample_docs):
@@ -63,6 +78,32 @@ class TestVectorRetriever:
         assert loaded.index.ntotal == 5
         results = loaded.search("编程", top_k=2)
         assert len(results) <= 2
+
+    def test_add_documents(self, sample_docs):
+        retriever = VectorRetriever(embedding_dim=768)
+        retriever.build_index(sample_docs[:3])
+        assert retriever.index.ntotal == 3
+
+        retriever.add_documents(sample_docs[3:])
+        assert retriever.index.ntotal == 5
+        results = retriever.search("神经网络", top_k=2)
+        assert len(results) <= 2
+
+    def test_remove_documents_by_relative_paths(self, sample_docs):
+        retriever = VectorRetriever(embedding_dim=768)
+        retriever.build_index(sample_docs)
+        assert retriever.index.ntotal == 5
+
+        removed = retriever.remove_documents_by_relative_paths({"py.md", "java.md"})
+        assert removed == 2
+        assert retriever.index.ntotal == 3
+        remaining_paths = {d.metadata["relative_path"] for d in retriever.documents}
+        assert remaining_paths == {"ml.md", "dl.md", "git.md"}
+
+        # 删除不存在的路径不应影响
+        removed2 = retriever.remove_documents_by_relative_paths({"not_exist.md"})
+        assert removed2 == 0
+        assert retriever.index.ntotal == 3
 
 
 class TestHybridRetriever:

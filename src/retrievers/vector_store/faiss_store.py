@@ -37,10 +37,48 @@ class FAISSVectorStore(VectorStore):
         faiss.normalize_L2(embeddings)
 
         if self.index is None:
-            self.index = faiss.IndexFlatIP(self.embedding_dim)
+            actual_dim = embeddings.shape[1]
+            self.index = faiss.IndexFlatIP(actual_dim)
 
         self.index.add(embeddings)
         self.documents.extend(documents)
+
+    def remove_documents_by_relative_paths(self, relative_paths: set[str]) -> int:
+        """按 relative_path 删除文档并重建 FAISS index
+
+        FAISS IndexFlatIP 不支持直接删除，因此导出全部 embeddings 后，
+        保留未删除的向量并重新创建 index。
+
+        Args:
+            relative_paths: 要删除的 relative_path 集合
+
+        Returns:
+            实际删除的文档数量
+        """
+        if not relative_paths or not self.documents:
+            return 0
+
+        keep_indices = [
+            i
+            for i, doc in enumerate(self.documents)
+            if doc.metadata.get("relative_path", "") not in relative_paths
+        ]
+        removed_count = len(self.documents) - len(keep_indices)
+        if removed_count == 0:
+            return 0
+
+        self.documents = [self.documents[i] for i in keep_indices]
+
+        if self.index is not None and self.index.ntotal > 0:
+            # IndexFlatIP 支持 reconstruct_n；导出全部 embeddings 后保留需要的
+            all_embeddings = self.index.reconstruct_n(0, self.index.ntotal)
+            keep_embeddings = all_embeddings[keep_indices]
+            dim = self.index.d
+            self.index = faiss.IndexFlatIP(dim)
+            if len(keep_embeddings) > 0:
+                self.index.add(keep_embeddings)
+
+        return removed_count
 
     def delete_by_filter(self, filter_expr: str | dict) -> int:
         """FAISS 不支持直接删除，返回 0 提示重建索引"""

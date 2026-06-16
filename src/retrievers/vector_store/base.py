@@ -54,7 +54,8 @@ class VectorStore(ABC):
             kwargs = {}
             if cache_dir:
                 kwargs["cache_folder"] = cache_dir
-            kwargs.setdefault("device", "cpu")
+            # 默认 CPU，可通过环境变量覆盖（如 mps/cuda/auto）
+            kwargs.setdefault("device", os.getenv("EMBEDDING_DEVICE", "cpu"))
             self._embedder = SentenceTransformer(model_path, **kwargs)
         return self._embedder
 
@@ -70,6 +71,11 @@ class VectorStore(ABC):
     @abstractmethod
     def delete_by_filter(self, filter_expr: str | dict) -> int:
         """按条件删除文档，返回删除数量"""
+        pass
+
+    @abstractmethod
+    def remove_documents_by_relative_paths(self, relative_paths: set[str]) -> int:
+        """按 relative_path 删除文档，返回删除数量"""
         pass
 
     @abstractmethod
