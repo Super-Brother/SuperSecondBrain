@@ -14,6 +14,8 @@ const defaultConfig: DesktopConfig = {
 
 export function Onboarding({ onDone }: { onDone: () => void }) {
   const [cfg, setCfg] = useState<DesktopConfig>(defaultConfig);
+  const [importPath, setImportPath] = useState("");
+  const [importOverwrite, setImportOverwrite] = useState(false);
   const [taskId, setTaskId] = useState<string | null>(null);
   const [taskStatus, setTaskStatus] = useState<{ status: string; message: string; error?: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -22,6 +24,23 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
     const selected = await window.secondbrain.selectVaultDirectory();
     if (selected) {
       setCfg((prev) => ({ ...prev, vault_path: selected }));
+    }
+  }
+
+  async function handleImport() {
+    setError(null);
+    if (!importPath) {
+      setError("请输入源数据目录");
+      return;
+    }
+    try {
+      await apiPost("/api/v1/desktop/import-data", {
+        source_data_dir: importPath,
+        overwrite: importOverwrite,
+      });
+      setImportPath("");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
     }
   }
 
@@ -121,6 +140,27 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
             value={cfg.reranker_model}
             onChange={(e) => updateField("reranker_model", e.target.value)}
           />
+        </section>
+
+        <section>
+          <h2>4. 导入已有数据（可选）</h2>
+          <div className="field-row">
+            <input
+              type="text"
+              value={importPath}
+              onChange={(e) => setImportPath(e.target.value)}
+              placeholder="/path/to/project/data"
+            />
+          </div>
+          <label className="checkbox">
+            <input
+              type="checkbox"
+              checked={importOverwrite}
+              onChange={(e) => setImportOverwrite(e.target.checked)}
+            />
+            覆盖已有数据
+          </label>
+          <button onClick={handleImport}>导入现有项目数据</button>
         </section>
 
         {taskStatus && (

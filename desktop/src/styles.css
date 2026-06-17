@@ -100,6 +100,18 @@ body {
   cursor: not-allowed;
 }
 
+.onboarding-card label.checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0;
+  cursor: pointer;
+}
+
+.onboarding-card label.checkbox input {
+  width: auto;
+}
+
 .error {
   background: #3f1d22;
   color: #fca5a5;
