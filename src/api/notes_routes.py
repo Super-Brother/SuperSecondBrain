@@ -32,6 +32,7 @@ from src.models.notes import (
 )
 from src.utils.audit_logger import audit_log, AuditAction
 from src.utils.logger import log
+from src.utils.vault_git import GitSyncError, commit_and_push_vault_change
 
 VAULT_PATH = os.getenv(
     "VAULT_PATH",
@@ -39,6 +40,22 @@ VAULT_PATH = os.getenv(
 )
 
 router = APIRouter()
+
+
+def _writeback_enabled() -> bool:
+    return os.getenv("VAULT_GIT_WRITEBACK", "false").lower() in {"true", "1", "yes"}
+
+
+def _maybe_writeback_note_change(action: str, relative_path: str) -> JSONResponse | None:
+    if not _writeback_enabled():
+        return None
+    try:
+        commit_and_push_vault_change(VAULT_PATH, action, relative_path)
+    except GitSyncError as e:
+        return JSONResponse(status_code=409, content={"error": str(e)})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": f"Git writeback failed: {str(e)}"})
+    return None
 
 
 # ---- 搜索必须在 /notes/{path} 之前注册，否则 "search" 会被当作路径参数 ----
@@ -170,6 +187,10 @@ async def api_create_note(request: Request, body: NoteCreateRequest):
         except Exception as e:
             log.warning("增量索引重建失败: %s", e)
 
+    writeback_error = _maybe_writeback_note_change("create", body.relative_path)
+    if writeback_error is not None:
+        return writeback_error
+
     audit_log(
         AuditAction.NOTE_CREATE,
         request,
@@ -206,6 +227,10 @@ async def api_update_note(
         except Exception as e:
             log.warning("增量索引重建失败: %s", e)
 
+    writeback_error = _maybe_writeback_note_change("update", relative_path)
+    if writeback_error is not None:
+        return writeback_error
+
     audit_log(
         AuditAction.NOTE_UPDATE,
         request,
@@ -232,6 +257,10 @@ async def api_delete_note(request: Request, relative_path: str):
             app_pipeline.build_index(incremental=True)
         except Exception as e:
             log.warning("增量索引重建失败: %s", e)
+
+    writeback_error = _maybe_writeback_note_change("delete", relative_path)
+    if writeback_error is not None:
+        return writeback_error
 
     audit_log(
         AuditAction.NOTE_DELETE,

@@ -431,6 +431,36 @@ class TestDownloadDocument:
         assert r.status_code == 404
 
 
+def test_create_note_writeback_skips_by_default(client):
+    body = {
+        "relative_path": "默认不写回.md",
+        "title": "默认不写回",
+        "content": "正文内容足够长" * 5,
+        "tags": [],
+    }
+    with patch("src.api.notes_routes.commit_and_push_vault_change") as writeback:
+        r = client.post("/api/v1/notes", json=body, headers=AUTH_HEADER)
+
+    assert r.status_code == 200
+    writeback.assert_not_called()
+
+
+def test_update_note_returns_conflict_when_writeback_fails(client, monkeypatch):
+    from src.utils.vault_git import GitSyncError
+
+    monkeypatch.setenv("VAULT_GIT_WRITEBACK", "true")
+    body = {"content": "冲突后的正文内容" * 5, "tags": ["冲突"]}
+
+    with patch(
+        "src.api.notes_routes.commit_and_push_vault_change",
+        side_effect=GitSyncError("CONFLICT"),
+    ):
+        r = client.put("/api/v1/notes/测试笔记.md", json=body, headers=AUTH_HEADER)
+
+    assert r.status_code == 409
+    assert "CONFLICT" in r.json()["error"]
+
+
 class TestSecurity:
     """测试安全边界"""
 
