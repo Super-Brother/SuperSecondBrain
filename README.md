@@ -149,6 +149,39 @@ streamlit run scripts/streamlit_app.py
 python scripts/gradio_app.py
 ```
 
+## 桌面端（macOS）
+
+SecondBrain Chat 同时提供独立的 Electron 桌面应用。桌面版在后台启动本地 FastAPI 服务，数据存放在 macOS Application Support 目录，不依赖 Docker 或命令行。
+
+### 开发
+
+```bash
+# 1. 构建 Python 后端可执行文件
+./scripts/build_desktop_backend.sh
+
+# 2. 启动桌面开发模式（Vite + Electron）
+cd desktop && npm run electron:dev
+```
+
+### 打包 DMG
+
+```bash
+./scripts/build_desktop_dmg.sh
+```
+
+打包完成后，`desktop/release/` 下会生成 `SecondBrain Chat.dmg`。
+
+### 桌面版数据目录
+
+- macOS: `~/Library/Application Support/SecondBrain Chat/`
+- 包含：`conversations.db`、`auth.db`、`audit.db`、`metrics.db`、`model_config.json`、`index/`、`desktop_config.json`
+
+### 桌面版范围说明
+
+- 桌面版**不提供笔记管理功能**（无笔记树、笔记搜索、笔记新建/编辑/删除）。
+- 笔记管理请继续使用 Obsidian 或其他笔记软件。
+- 桌面版问答中的来源引用会调用系统默认应用打开：Markdown 笔记优先通过 `obsidian://` 协议打开，其他格式通过系统默认程序打开。
+
 ## 企业级配置
 
 ### 切换向量数据库（FAISS → Milvus）

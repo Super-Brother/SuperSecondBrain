@@ -1,0 +1,14 @@
+appId: ai.secondbrain.chat
+productName: SecondBrain Chat
+directories:
+  output: release
+files:
+  - dist/**
+  - dist-electron/**
+extraResources:
+  - from: ../dist/secondbrain-backend
+    to: secondbrain-backend
+mac:
+  target:
+    - dmg
+  category: public.app-category.productivity
