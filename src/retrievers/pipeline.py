@@ -535,10 +535,12 @@ class SecondBrainPipeline:
 
         # 重建索引
         self.vector_retriever = VectorRetriever()
-        self.vector_retriever.build_index(all_docs)
+        if all_docs:
+            self.vector_retriever.build_index(all_docs)
 
         self.bm25_retriever = BM25Retriever()
-        self.bm25_retriever.build_index(all_docs)
+        if all_docs:
+            self.bm25_retriever.build_index(all_docs)
 
         self.hybrid_retriever = HybridRetriever(self.vector_retriever, self.bm25_retriever)
         self.rag_retriever = RAGRetriever(self.hybrid_retriever)
