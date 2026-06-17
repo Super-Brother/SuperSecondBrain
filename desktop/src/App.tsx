@@ -3,11 +3,15 @@ import { apiGet } from "./api/client";
 import { ChatView } from "./components/ChatView";
 import { Onboarding } from "./components/Onboarding";
 import { SessionList } from "./components/SessionList";
+import { SettingsView } from "./components/SettingsView";
 import type { DesktopStatus } from "./types";
+
+type View = "chat" | "settings";
 
 export function App() {
   const [status, setStatus] = useState<DesktopStatus | null>(null);
   const [loading, setLoading] = useState(true);
+  const [view, setView] = useState<View>("chat");
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -47,9 +51,18 @@ export function App() {
           onSelectSession={setSelectedSessionId}
           onNewSession={setSelectedSessionId}
         />
+        <div className="sidebar-footer">
+          <button onClick={() => setView(view === "settings" ? "chat" : "settings")}>
+            {view === "settings" ? "返回对话" : "设置"}
+          </button>
+        </div>
       </aside>
       <main className="app-main">
-        <ChatView vaultPath={status.vault_path} />
+        {view === "settings" ? (
+          <SettingsView onBack={() => setView("chat")} />
+        ) : (
+          <ChatView vaultPath={status.vault_path} />
+        )}
       </main>
     </div>
   );
