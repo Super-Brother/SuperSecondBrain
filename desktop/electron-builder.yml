@@ -5,6 +5,7 @@ directories:
 files:
   - dist/**
   - dist-electron/**
+electronDist: node_modules/electron/dist
 extraResources:
   - from: ../dist/secondbrain-backend
     to: secondbrain-backend
