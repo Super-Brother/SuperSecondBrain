@@ -19,3 +19,12 @@ models/*
 node_modules
 /docs
 .codegraph
+build
+
+# Desktop build outputs
+desktop/node_modules/
+desktop/dist/
+desktop/dist-electron/
+desktop/release/
+dist/
+*.spec.bak
