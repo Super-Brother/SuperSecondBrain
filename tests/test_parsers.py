@@ -4,10 +4,12 @@ import os
 import sys
 import tempfile
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.parsers.obsidian_parser import ObsidianParser, ObsidianNote, classify_domain, DOMAIN_MAP
+from src.parsers.document_router import DocumentRouter
 
 
 def _write_note(tmpdir: str, rel_path: str, content: str):
@@ -128,3 +130,39 @@ class TestIncrementalParse:
         changed, deleted = self.parser.parse_vault_incremental(manifest)
         assert len(changed) == 0
         assert len(deleted) == 0
+
+
+class TestDocumentRouterObsidianMixedFormats:
+    def test_obsidian_vault_keeps_parsing_non_markdown_formats(self, tmp_path):
+        (tmp_path / ".obsidian").mkdir()
+        md_file = tmp_path / "note.md"
+        pdf_file = tmp_path / "uploads" / "manual.pdf"
+        pdf_file.parent.mkdir()
+        md_file.write_text("# 标题\n" + "正文内容" * 10, encoding="utf-8")
+        pdf_file.write_bytes(b"%PDF-1.4 fake")
+
+        obs_note = MagicMock()
+        obs_note.relative_path = "note.md"
+
+        pdf_doc = MagicMock()
+        pdf_doc.metadata = {"source_file": str(pdf_file), "format": "pdf"}
+
+        router = DocumentRouter(str(tmp_path), use_obsidian=True)
+
+        with patch("src.parsers.document_router.ObsidianParser") as obs_cls:
+            obs_cls.return_value.parse_vault.return_value = [obs_note]
+
+            with patch.object(router, "_get_parser", return_value=None) as mock_get:
+                def side_effect(ext):
+                    if ext == ".pdf":
+                        mock_pdf = MagicMock()
+                        mock_pdf.parse_directory.return_value = [pdf_doc]
+                        return mock_pdf
+                    return None
+                mock_get.side_effect = side_effect
+
+                docs = router.parse_directory(str(tmp_path))
+
+        assert docs == [obs_note, pdf_doc]
+        obs_cls.return_value.parse_vault.assert_called_once()
+        mock_get.assert_any_call(".pdf")

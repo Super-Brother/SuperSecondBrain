@@ -63,13 +63,15 @@ class DocumentRouter:
         target_path = Path(dir_path)
         all_docs = []
 
+        parsed_obsidian_markdown = False
         if self.use_obsidian and (target_path / ".obsidian").exists():
             obs_parser = ObsidianParser(str(target_path))
-            notes = obs_parser.parse_vault()
-            all_docs.extend(notes)
-            return all_docs
+            all_docs.extend(obs_parser.parse_vault())
+            parsed_obsidian_markdown = True
 
         for ext in PARSER_MAP:
+            if parsed_obsidian_markdown and ext in OBSIDIAN_EXTENSIONS:
+                continue
             if include_types and ext not in include_types:
                 continue
 
