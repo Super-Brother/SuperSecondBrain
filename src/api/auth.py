@@ -27,6 +27,8 @@ from fastapi import Request
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from src.utils.app_paths import get_app_paths
+
 load_dotenv()
 
 
@@ -43,7 +45,8 @@ _VERIFY_CODES = {}   # email -> {code, exp, purpose}
 class UserStore:
     """SQLite 用户持久化存储"""
 
-    def __init__(self, db_path: str = "data/auth.db"):
+    def __init__(self, db_path: str | None = None):
+        db_path = db_path or str(get_app_paths().auth_db)
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row

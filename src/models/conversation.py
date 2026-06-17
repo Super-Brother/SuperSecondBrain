@@ -8,6 +8,8 @@ import json
 from pathlib import Path
 from typing import Optional
 
+from src.utils.app_paths import get_app_paths
+
 
 @dataclass
 class Message:
@@ -18,7 +20,8 @@ class Message:
 
 
 class ConversationManager:
-    def __init__(self, db_path: str = "data/conversations.db"):
+    def __init__(self, db_path: str | None = None):
+        db_path = db_path or str(get_app_paths().conversations_db)
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(db_path)
         self.conn.row_factory = sqlite3.Row

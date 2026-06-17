@@ -10,8 +10,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Optional
 
-
-CONFIG_FILE = os.getenv("MODEL_CONFIG_FILE", "data/model_config.json")
+from src.utils.app_paths import get_app_paths
 
 
 @dataclass(frozen=True)
@@ -23,9 +22,14 @@ class StoredModelConfig:
     preset: Optional[str] = None  # 记录用户选了哪个预设（"custom" 或 preset key）
 
 
+def _config_file() -> Path:
+    override = os.getenv("MODEL_CONFIG_FILE")
+    return Path(override) if override else get_app_paths().model_config_file
+
+
 def load_config() -> Optional[StoredModelConfig]:
     """读取持久化的模型配置；首次启动或文件损坏时返回 None。"""
-    path = Path(CONFIG_FILE)
+    path = _config_file()
     if not path.exists():
         return None
     try:
@@ -43,7 +47,7 @@ def load_config() -> Optional[StoredModelConfig]:
 
 def save_config(cfg: StoredModelConfig) -> None:
     """将模型配置写入 JSON 文件。"""
-    path = Path(CONFIG_FILE)
+    path = _config_file()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(asdict(cfg), ensure_ascii=False, indent=2),

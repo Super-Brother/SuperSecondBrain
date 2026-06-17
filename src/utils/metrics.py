@@ -28,6 +28,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from src.utils.app_paths import get_app_paths
+
 
 @dataclass
 class Histogram:
@@ -56,7 +58,8 @@ class Histogram:
 class MetricsCollector:
     """指标收集器 — 支持 SQLite 持久化（计数器 + Token 使用量）"""
 
-    def __init__(self, db_path: str = "data/metrics.db"):
+    def __init__(self, db_path: str | None = None):
+        db_path = db_path or str(get_app_paths().metrics_db)
         self.latency_histograms: dict[str, Histogram] = defaultdict(Histogram)
         self.counters: dict[str, int] = defaultdict(int)
         self.token_usage = {"prompt": 0, "completion": 0}

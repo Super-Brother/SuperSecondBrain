@@ -17,6 +17,7 @@ from typing import Any
 
 from fastapi import Request
 
+from src.utils.app_paths import get_app_paths
 from src.utils.logger import log
 
 
@@ -55,7 +56,8 @@ class AuditLogEntry:
 class AuditLogger:
     """审计日志记录器（SQLite 后端）"""
 
-    def __init__(self, db_path: str = "data/audit.db"):
+    def __init__(self, db_path: str | None = None):
+        db_path = db_path or str(get_app_paths().audit_db)
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self.db_path = db_path
         self._init_db()
