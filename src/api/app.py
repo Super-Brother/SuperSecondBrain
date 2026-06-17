@@ -61,6 +61,7 @@ from src.utils.redis_cache import RedisCache
 from src.api.auth import APIKeyMiddleware
 from src.api.static import HTML_TEMPLATE
 from src.api.notes_routes import router as notes_router
+from src.api.desktop_routes import router as desktop_router
 from src.utils.vault_watcher import VaultWatcher
 from src.utils.vault_git import GitSyncError, pull_vault
 from src.utils.app_paths import ensure_app_dirs, get_app_paths, is_desktop_mode
@@ -226,6 +227,7 @@ if api_key:
 
 # 注册笔记管理路由
 app.include_router(notes_router, prefix="/api/v1")
+app.include_router(desktop_router, prefix="/api/v1")
 
 
 # ---- 请求计时中间件 ----
