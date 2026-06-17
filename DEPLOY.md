@@ -9,11 +9,11 @@ cd secondbrain-chat
 
 # 2. 配置环境变量
 cp .env.server .env.server
-vim .env.server  # 修改 LLM 配置和文档路径
+vim .env.server  # 修改 LLM 配置和 Vault 路径
 
-# 3. 上传文档（如果需要）
-# 将 Obsidian vault 或文档目录上传到服务器
-rsync -avz /path/to/docs user@server:/data/docs
+# 3. 准备 Vault 目录
+mkdir -p data
+git clone <private-vault-repo-url> data/vault
 
 # 4. 运行部署脚本
 ./scripts/deploy_server.sh
@@ -29,7 +29,8 @@ cp .env.server .env.server
 
 编辑 `.env.server`：
 - `LLM_BASE_URL`: LLM 服务地址（如 Ollama、vLLM）
-- `DOCS_PATH`: 文档目录路径
+- `VAULT_PATH`: Vault 目录路径（默认 `/app/data/vault`）
+- `INDEX_DIR`: 索引存储目录（默认 `/app/data/index`）
 
 ### 2. 启动服务
 
@@ -58,6 +59,36 @@ curl -X POST http://localhost:8000/api/v1/chat \
   -H "Content-Type: application/json" \
   -d '{"query": "你好"}'
 ```
+
+## Server Vault Sync
+
+The server reads notes and documents from `VAULT_PATH=/app/data/vault` and stores generated indexes in `INDEX_DIR=/app/data/index`. In Docker deployment both paths are persisted by the `./data:/app/data` volume in `docker-compose.server.yml`.
+
+Recommended setup:
+
+```bash
+mkdir -p data
+git clone <private-vault-repo-url> data/vault
+cp .env.server.example .env.server  # if maintaining a separate example
+docker compose -f docker-compose.server.yml up -d --build
+```
+
+Configure GitHub/GitLab webhook:
+
+- URL: `https://<server-domain>/api/v1/sync/webhook`
+- Method: `POST`
+- Secret: same value as `SYNC_WEBHOOK_SECRET`
+- Event: push
+
+Manual rebuild:
+
+```bash
+curl -X POST http://127.0.0.1:8001/api/v1/sync/trigger \
+  -H 'Content-Type: application/json' \
+  -d '{"incremental": false}'
+```
+
+By default, server-side note edits update the mounted Vault files and rebuild the local index, but do not push back to Git. Set `VAULT_GIT_WRITEBACK=true` only when the server has Git credentials configured and conflicts should be surfaced to API callers as `409 Conflict`.
 
 ## 索引同步
 
