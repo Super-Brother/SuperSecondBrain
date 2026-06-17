@@ -63,6 +63,8 @@ from src.api.static import HTML_TEMPLATE
 from src.api.notes_routes import router as notes_router
 from src.utils.vault_watcher import VaultWatcher
 from src.utils.vault_git import GitSyncError, pull_vault
+from src.utils.app_paths import ensure_app_dirs, get_app_paths, is_desktop_mode
+from src.utils.desktop_config import load_desktop_config
 from src.utils.model_config_store import (
     StoredModelConfig,
     load_config as load_model_config,
@@ -111,7 +113,16 @@ vault_watcher: VaultWatcher = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global pipeline, conv_manager, response_cache, vault_watcher
+    global pipeline, conv_manager, response_cache, vault_watcher, VAULT_PATH, INDEX_DIR
+
+    # 桌面模式：解析用户数据目录并加载桌面配置
+    paths = ensure_app_dirs()
+    desktop_cfg = load_desktop_config() if is_desktop_mode() else None
+    if desktop_cfg:
+        if desktop_cfg.vault_path:
+            VAULT_PATH = desktop_cfg.vault_path
+        os.environ.setdefault("EMBEDDING_MODEL", desktop_cfg.embedding_model)
+        os.environ.setdefault("RERANKER_MODEL", desktop_cfg.reranker_model)
 
     # 优先使用持久化的模型配置；不存在则回退到环境变量
     stored = load_model_config()
@@ -125,12 +136,24 @@ async def lifespan(app: FastAPI):
         llm_api_key = os.getenv("LLM_API_KEY", "not-needed")
         llm_model = os.getenv("LLM_MODEL", "qwen2.5:3b")
 
+    if desktop_cfg:
+        llm_base_url = desktop_cfg.llm_base_url
+        llm_api_key = desktop_cfg.llm_api_key
+        llm_model = desktop_cfg.llm_model
+
+    vault_path = desktop_cfg.vault_path if desktop_cfg and desktop_cfg.vault_path else VAULT_PATH
+    index_dir = str(paths.index_dir) if is_desktop_mode() else INDEX_DIR
+    embedding_model = desktop_cfg.embedding_model if desktop_cfg else os.getenv("EMBEDDING_MODEL", "BAAI/bge-large-zh-v1.5")
+    reranker_model = desktop_cfg.reranker_model if desktop_cfg else os.getenv("RERANKER_MODEL", "BAAI/bge-reranker-base")
+
     config = PipelineConfig(
-        vault_path=VAULT_PATH,
-        index_dir=INDEX_DIR,
+        vault_path=vault_path,
+        index_dir=index_dir,
         llm_base_url=llm_base_url,
         llm_api_key=llm_api_key,
         llm_model=llm_model,
+        embedding_model=embedding_model,
+        reranker_model=reranker_model,
     )
     pipeline = SecondBrainPipeline(config)
     conv_manager = ConversationManager()
@@ -148,10 +171,10 @@ async def lifespan(app: FastAPI):
     else:
         response_cache = ResponseCache(max_size=256, ttl_seconds=int(os.getenv("CACHE_TTL", "3600")))
 
-    index_path = Path(INDEX_DIR)
+    index_path = Path(index_dir)
     if (index_path / "faiss.index").exists():
-        log.info("加载已有索引: %s", INDEX_DIR)
-        pipeline.load_index(INDEX_DIR)
+        log.info("加载已有索引: %s", index_dir)
+        pipeline.load_index(index_dir)
         # 预热模型（避免首次请求时加载导致的长时间等待）
         log.info("正在预热模型（Reranker / Embedding / LLM）...")
         pipeline.warmup()
