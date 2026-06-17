@@ -129,6 +129,7 @@ class TestVaultWatcher:
 
             # 验证增量重建被调用
             pipeline.build_index.assert_called_once_with(incremental=True)
+            pipeline.rebuild_index_from_vault.assert_not_called()
             assert watcher._rebuild_count == 1
 
     def test_debounce_combines_multiple_changes(self):
@@ -186,8 +187,9 @@ class TestVaultWatcher:
 
             watcher.stop()
 
-            # 验证重建被触发
-            pipeline.build_index.assert_called_once_with(incremental=True)
+            # 验证全量重建被触发
+            pipeline.rebuild_index_from_vault.assert_called_once_with()
+            pipeline.build_index.assert_not_called()
             assert watcher._rebuild_count == 1
 
     def test_file_deletion_triggers_rebuild(self):

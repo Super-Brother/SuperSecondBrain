@@ -32,19 +32,23 @@ class VaultEventHandler(FileSystemEventHandler):
 
     def on_created(self, event):
         if self._should_handle(event):
-            self.watcher._schedule_rebuild()
+            self.watcher._schedule_rebuild(full_rebuild=self._requires_full_rebuild(event))
 
     def on_modified(self, event):
         if self._should_handle(event):
-            self.watcher._schedule_rebuild()
+            self.watcher._schedule_rebuild(full_rebuild=self._requires_full_rebuild(event))
 
     def on_deleted(self, event):
         if self._should_handle(event):
-            self.watcher._schedule_rebuild()
+            self.watcher._schedule_rebuild(full_rebuild=self._requires_full_rebuild(event))
 
     def on_moved(self, event):
         if self._should_handle(event):
-            self.watcher._schedule_rebuild()
+            self.watcher._schedule_rebuild(full_rebuild=self._requires_full_rebuild(event))
+
+    def _requires_full_rebuild(self, event) -> bool:
+        path = Path(event.src_path)
+        return path.suffix.lower() != ".md"
 
     def _should_handle(self, event) -> bool:
         """判断是否应该处理该事件"""
@@ -91,6 +95,7 @@ class VaultWatcher:
         self._started = False
         self._last_rebuild_time: float = 0.0
         self._rebuild_count = 0
+        self._pending_full_rebuild = False
 
     @property
     def is_running(self) -> bool:
@@ -143,35 +148,42 @@ class VaultWatcher:
         self._started = False
         log.info("VaultWatcher 已停止")
 
-    def _schedule_rebuild(self) -> None:
+    def _schedule_rebuild(self, full_rebuild: bool = False) -> None:
         """调度一次索引重建（带防抖）"""
-        # 取消已存在的定时器
+        self._pending_full_rebuild = self._pending_full_rebuild or full_rebuild
         if self._debounce_timer is not None:
             self._debounce_timer.cancel()
 
-        # 创建新定时器
         self._debounce_timer = threading.Timer(self.debounce_seconds, self._do_rebuild)
         self._debounce_timer.daemon = True
         self._debounce_timer.start()
 
     def _do_rebuild(self) -> None:
-        """执行增量索引重建"""
+        """执行索引重建"""
         with self._rebuild_lock:
-            log.info("[VaultWatcher] 开始增量索引重建...")
+            full_rebuild = self._pending_full_rebuild
+            self._pending_full_rebuild = False
+            if full_rebuild:
+                log.info("[VaultWatcher] 开始全量索引重建...")
+            else:
+                log.info("[VaultWatcher] 开始增量索引重建...")
             start_time = time.time()
 
             try:
-                stats = self.pipeline.build_index(incremental=True)
+                if full_rebuild:
+                    stats = self.pipeline.rebuild_index_from_vault()
+                else:
+                    stats = self.pipeline.build_index(incremental=True)
                 elapsed = time.time() - start_time
 
                 self._rebuild_count += 1
                 self._last_rebuild_time = time.time()
 
                 log.info(
-                    "[VaultWatcher] 增量重建完成: notes=%d chunks=%d (%.2fs)",
+                    "[VaultWatcher] 重建完成: notes=%d chunks=%d (%.2fs)",
                     stats.get("total_notes", 0),
                     stats.get("total_chunks", 0),
                     elapsed,
                 )
             except Exception:
-                log.exception("[VaultWatcher] 增量重建失败，将继续监听文件变更")
+                log.exception("[VaultWatcher] 重建失败，将继续监听文件变更")
