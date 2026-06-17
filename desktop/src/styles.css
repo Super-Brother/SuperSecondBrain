@@ -13,3 +13,123 @@ body {
   min-height: 100vh;
   padding: 32px;
 }
+
+.onboarding {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  background: #101114;
+}
+
+.onboarding-card {
+  width: 100%;
+  max-width: 560px;
+  background: #181a1f;
+  border: 1px solid #2b2e36;
+  border-radius: 16px;
+  padding: 32px;
+}
+
+.onboarding-card h1 {
+  margin: 0 0 8px;
+  font-size: 24px;
+}
+
+.onboarding-card .subtitle {
+  margin: 0 0 24px;
+  color: #9ba3af;
+}
+
+.onboarding-card section {
+  margin-bottom: 24px;
+}
+
+.onboarding-card h2 {
+  font-size: 16px;
+  margin: 0 0 12px;
+  color: #e5e7eb;
+}
+
+.onboarding-card label {
+  display: block;
+  margin: 12px 0 6px;
+  font-size: 13px;
+  color: #9ba3af;
+}
+
+.onboarding-card input {
+  width: 100%;
+  padding: 10px 12px;
+  background: #101114;
+  border: 1px solid #2b2e36;
+  border-radius: 8px;
+  color: #f2f3f5;
+  font-size: 14px;
+}
+
+.field-row {
+  display: flex;
+  gap: 8px;
+}
+
+.field-row input {
+  flex: 1;
+}
+
+.onboarding-card button {
+  padding: 10px 16px;
+  background: #2b2e36;
+  border: 1px solid #3f434d;
+  border-radius: 8px;
+  color: #f2f3f5;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.onboarding-card button.primary {
+  width: 100%;
+  background: #3b82f6;
+  border-color: #3b82f6;
+  margin-top: 8px;
+}
+
+.onboarding-card button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.error {
+  background: #3f1d22;
+  color: #fca5a5;
+  padding: 10px 12px;
+  border-radius: 8px;
+  margin-bottom: 16px;
+}
+
+.task-status {
+  padding: 10px 12px;
+  border-radius: 8px;
+  margin-bottom: 16px;
+  font-size: 14px;
+}
+
+.task-status.running {
+  background: #1e293b;
+  color: #93c5fd;
+}
+
+.task-status.succeeded {
+  background: #132a1d;
+  color: #86efac;
+}
+
+.task-status.failed {
+  background: #3f1d22;
+  color: #fca5a5;
+}
+
+.task-error {
+  margin-left: 8px;
+}
