@@ -191,6 +191,29 @@ class TestDomainsEndpoint:
         assert "domains" in r.json()
 
 
+class TestSyncWebhook:
+    def test_sync_webhook_pulls_vault_and_rebuilds(self, client, monkeypatch):
+        from src.api import app as app_module
+        from src.utils.vault_git import GitSyncResult
+
+        mock_pipeline = MagicMock()
+        mock_pipeline.rebuild_index_from_vault.return_value = {
+            "total_notes": 1,
+            "total_chunks": 2,
+            "domain_distribution": {"其他": 2},
+        }
+        monkeypatch.setattr(app_module, "pipeline", mock_pipeline)
+        monkeypatch.setattr(app_module, "SYNC_WEBHOOK_SECRET", "")
+
+        with patch("src.api.app.pull_vault", return_value=GitSyncResult(stdout="pulled")) as pull:
+            r = client.post("/api/v1/sync/webhook", content=b"{}")
+
+        assert r.status_code == 200
+        assert r.json()["sync_output"] == "pulled"
+        pull.assert_called_once()
+        mock_pipeline.rebuild_index_from_vault.assert_called_once_with()
+
+
 class TestFeedbackEndpoint:
     def test_feedback(self, client):
         r = client.post("/api/v1/feedback", json={

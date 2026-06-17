@@ -62,6 +62,7 @@ from src.api.auth import APIKeyMiddleware
 from src.api.static import HTML_TEMPLATE
 from src.api.notes_routes import router as notes_router
 from src.utils.vault_watcher import VaultWatcher
+from src.utils.vault_git import GitSyncError, pull_vault
 from src.utils.model_config_store import (
     StoredModelConfig,
     load_config as load_model_config,
@@ -840,36 +841,18 @@ async def sync_webhook(request: Request):
     sync_output = ""
     sync_error = ""
     try:
-        if SYNC_SCRIPT_PATH and os.path.exists(SYNC_SCRIPT_PATH):
-            result = subprocess.run(
-                [SYNC_SCRIPT_PATH],
-                capture_output=True,
-                text=True,
-                timeout=120,
-            )
-        elif os.path.exists(os.path.join(VAULT_PATH, ".git")):
-            result = subprocess.run(
-                ["git", "-C", VAULT_PATH, "pull"],
-                capture_output=True,
-                text=True,
-                timeout=120,
-            )
-        else:
-            return JSONResponse(
-                status_code=http_status.HTTP_400_BAD_REQUEST,
-                content={"error": "No sync method configured. Set SYNC_SCRIPT_PATH or ensure vault is a git repo."},
-            )
+        result = pull_vault(VAULT_PATH, SYNC_SCRIPT_PATH)
         sync_output = result.stdout
         sync_error = result.stderr
-        if result.returncode != 0:
-            return JSONResponse(
-                status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
-                content={"error": f"Sync failed: {sync_error}", "stdout": sync_output},
-            )
     except subprocess.TimeoutExpired:
         return JSONResponse(
             status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={"error": "Sync timed out after 120s"},
+        )
+    except GitSyncError as e:
+        return JSONResponse(
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"error": f"Sync failed: {str(e)}"},
         )
     except Exception as e:
         return JSONResponse(
