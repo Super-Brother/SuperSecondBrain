@@ -1,11 +1,14 @@
 import { useEffect, useState } from "react";
 import { apiGet } from "./api/client";
+import { ChatView } from "./components/ChatView";
 import { Onboarding } from "./components/Onboarding";
+import { SessionList } from "./components/SessionList";
 import type { DesktopStatus } from "./types";
 
 export function App() {
   const [status, setStatus] = useState<DesktopStatus | null>(null);
   const [loading, setLoading] = useState(true);
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
 
   useEffect(() => {
     apiGet<DesktopStatus>("/api/v1/desktop/status")
@@ -18,6 +21,11 @@ export function App() {
       });
   }, []);
 
+  async function refreshStatus() {
+    const s = await apiGet<DesktopStatus>("/api/v1/desktop/status");
+    setStatus(s);
+  }
+
   if (loading) {
     return (
       <main className="app-shell">
@@ -27,13 +35,22 @@ export function App() {
   }
 
   if (!status || !status.onboarding_complete) {
-    return <Onboarding onDone={() => setStatus((prev) => prev ? { ...prev, onboarding_complete: true } : null)} />;
+    return <Onboarding onDone={refreshStatus} />;
   }
 
   return (
-    <main className="app-shell">
-      <h1>SecondBrain Chat</h1>
-      <p>Onboarding complete. Chat UI will be wired here.</p>
-    </main>
+    <div className="app-layout">
+      <aside className="app-sidebar">
+        <div className="app-brand">SecondBrain Chat</div>
+        <SessionList
+          selectedSessionId={selectedSessionId}
+          onSelectSession={setSelectedSessionId}
+          onNewSession={setSelectedSessionId}
+        />
+      </aside>
+      <main className="app-main">
+        <ChatView vaultPath={status.vault_path} />
+      </main>
+    </div>
   );
 }
