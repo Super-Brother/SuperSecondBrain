@@ -3,6 +3,7 @@
 整合：Obsidian解析 → 文档切分 → Embedding → 混合检索 → Rerank → LLM生成
 """
 
+import hashlib
 import os
 import json
 import pickle
