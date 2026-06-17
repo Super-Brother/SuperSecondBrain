@@ -14,6 +14,9 @@ services:
       - HF_ENDPOINT=https://hf-mirror.com
       - SENTENCE_TRANSFORMERS_HOME=/app/data/models
     volumes:
+      # ./data/vault  -> Git-synced note/document workspace
+      # ./data/index  -> persisted FAISS/BM25 index
+      # ./data/models -> local embedding/reranker model cache
       - ./data:/app/data
       - huggingface_cache:/root/.cache/huggingface
     depends_on:
