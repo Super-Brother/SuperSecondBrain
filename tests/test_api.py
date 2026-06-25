@@ -211,7 +211,7 @@ class TestSyncWebhook:
         assert r.status_code == 200
         assert r.json()["sync_output"] == "pulled"
         pull.assert_called_once()
-        mock_pipeline.rebuild_index_from_vault.assert_called_once_with()
+        mock_pipeline.rebuild_index_from_vault.assert_called_once_with(incremental=True)
 
 
 class TestFeedbackEndpoint:

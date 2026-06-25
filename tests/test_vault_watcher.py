@@ -187,8 +187,8 @@ class TestVaultWatcher:
 
             watcher.stop()
 
-            # 验证全量重建被触发
-            pipeline.rebuild_index_from_vault.assert_called_once_with()
+            # 验证多格式增量重建被触发
+            pipeline.rebuild_index_from_vault.assert_called_once_with(incremental=True)
             pipeline.build_index.assert_not_called()
             assert watcher._rebuild_count == 1
 

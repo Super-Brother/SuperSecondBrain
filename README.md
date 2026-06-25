@@ -129,6 +129,11 @@ python scripts/build_index.py
 # 增量更新
 python scripts/build_index.py --incremental
 
+# 多格式增量更新（PDF / Word / PPT / Excel）
+curl -X POST http://127.0.0.1:8001/api/v1/sync/trigger \
+  -H 'Content-Type: application/json' \
+  -d '{"incremental": true}'
+
 # 从多格式文档目录构建（企业级）
 python scripts/build_index.py --source-dir /path/to/docs --include-types .pdf .docx .md
 

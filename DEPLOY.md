@@ -44,8 +44,13 @@ docker compose -f docker-compose.server.yml up -d
 # 首次全量构建（耗时较长）
 docker compose -f docker-compose.server.yml exec api python scripts/build_index.py
 
-# 后续增量更新
+# 后续 Markdown/Obsidian 增量更新
 docker compose -f docker-compose.server.yml exec api python scripts/build_index.py --incremental
+
+# 后续多格式增量更新（推荐给 Git 同步部署）
+curl -X POST http://127.0.0.1:8001/api/v1/sync/trigger \
+  -H 'Content-Type: application/json' \
+  -d '{"incremental": true}'
 ```
 
 ### 4. 验证服务
@@ -80,12 +85,12 @@ Configure GitHub/GitLab webhook:
 - Secret: same value as `SYNC_WEBHOOK_SECRET`
 - Event: push
 
-Manual rebuild:
+Manual incremental sync:
 
 ```bash
 curl -X POST http://127.0.0.1:8001/api/v1/sync/trigger \
   -H 'Content-Type: application/json' \
-  -d '{"incremental": false}'
+  -d '{"incremental": true}'
 ```
 
 By default, server-side note edits update the mounted Vault files and rebuild the local index, but do not push back to Git. Set `VAULT_GIT_WRITEBACK=true` only when the server has Git credentials configured and conflicts should be surfaced to API callers as `409 Conflict`.

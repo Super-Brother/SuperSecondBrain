@@ -57,6 +57,12 @@ def main():
     )
 
     pipeline = SecondBrainPipeline(config)
+    if args.incremental:
+        index_file = os.path.join(index_dir, "faiss.index")
+        documents_file = os.path.join(index_dir, "documents.pkl")
+        bm25_file = os.path.join(index_dir, "bm25.pkl")
+        if os.path.exists(index_file) and os.path.exists(documents_file) and os.path.exists(bm25_file):
+            pipeline.load_index(index_dir)
     stats = pipeline.build_index(incremental=args.incremental)
 
     import json

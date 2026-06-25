@@ -1087,14 +1087,14 @@ async def sync_webhook(request: Request):
             content={"error": f"Sync error: {str(e)}"},
         )
 
-    # 触发索引重建（多格式全量重建，确保所有格式都被索引）
+    # 触发多格式增量索引重建，避免每次同步后全量向量化
     try:
         if pipeline is None:
             return JSONResponse(
                 status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
                 content={"error": "Pipeline not initialized"},
             )
-        stats = pipeline.rebuild_index_from_vault()
+        stats = pipeline.rebuild_index_from_vault(incremental=True)
     except Exception as e:
         return JSONResponse(
             status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -1129,7 +1129,7 @@ async def sync_trigger(request: Request, body: SyncTriggerRequest | None = None)
     incremental = body.incremental if body else True
     try:
         if incremental:
-            stats = pipeline.build_index(incremental=True)
+            stats = pipeline.rebuild_index_from_vault(incremental=True)
         else:
             stats = pipeline.rebuild_index_from_vault()
     except Exception as e:
@@ -1192,7 +1192,7 @@ async def upload_document(request: Request, file: UploadFile = File(...)):
                 status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
                 content={"error": "Pipeline not initialized"},
             )
-        stats = pipeline.rebuild_index_from_vault()
+        stats = pipeline.rebuild_index_from_vault(incremental=True)
     except Exception as e:
         return JSONResponse(
             status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -1262,7 +1262,7 @@ async def batch_upload_documents(request: Request, files: list[UploadFile] = Fil
                 status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
                 content={"error": "Pipeline not initialized"},
             )
-        stats = pipeline.rebuild_index_from_vault()
+        stats = pipeline.rebuild_index_from_vault(incremental=True)
     except Exception as e:
         return JSONResponse(
             status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,

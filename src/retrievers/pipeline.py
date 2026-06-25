@@ -149,6 +149,8 @@ class SecondBrainPipeline:
             print("✅ 无变更，跳过索引重建")
             return self._stats
 
+        return self._apply_incremental_documents(changed_notes, deleted, chunk_size, label="增量")
+
         deleted_set = set(deleted)
 
         # 切分变更文档
@@ -225,6 +227,99 @@ class SecondBrainPipeline:
             self.save_index(self.config.index_dir)
             manifest_path = os.path.join(self.config.index_dir, "manifest.json")
             print(f"✅ 增量索引完成（共 {len(all_docs)} chunks）")
+
+        with open(manifest_path, "w") as f:
+            json.dump(new_manifest, f, ensure_ascii=False, indent=2)
+
+        return self._stats
+
+    def _apply_incremental_documents(
+        self,
+        changed_notes,
+        deleted: list[str],
+        chunk_size: int,
+        label: str = "增量",
+    ):
+        """Apply changed/deleted parsed documents without re-embedding unchanged chunks."""
+        changed_paths = {
+            note.relative_path
+            for note in changed_notes
+            if getattr(note, "relative_path", "")
+        }
+        affected_paths = set(deleted) | changed_paths
+
+        print("✂️ 切分变更文档...")
+        new_docs = split_notes_to_documents(
+            changed_notes, chunk_size=chunk_size, chunk_overlap=self.config.chunk_overlap
+        )
+        print(f"📝 新增 {len(new_docs)} 个 chunks")
+
+        can_incremental = (
+            self.vector_retriever is not None
+            and self.bm25_retriever is not None
+            and os.path.exists(os.path.join(self.config.index_dir, "faiss.index"))
+            and os.path.exists(os.path.join(self.config.index_dir, "documents.pkl"))
+        )
+
+        if can_incremental:
+            if affected_paths:
+                print(f"🗑️ 删除 {len(affected_paths)} 个旧文件对应的 chunks...")
+                vector_removed = self.vector_retriever.remove_documents_by_relative_paths(affected_paths)
+                bm25_removed = self.bm25_retriever.remove_documents_by_relative_paths(affected_paths)
+                print(f"🗑️ 向量索引删除 {vector_removed} 个 chunks，BM25 删除 {bm25_removed} 个")
+
+            if new_docs:
+                print(f"➕ 追加 {len(new_docs)} 个新 chunks 到现有索引...")
+                self.vector_retriever.add_documents(new_docs)
+                self.bm25_retriever.add_documents(new_docs)
+
+            all_docs = self.vector_retriever.documents
+        else:
+            print("⚠️ 未检测到已加载索引，回退到全量重建...")
+            old_docs = []
+            docs_path = os.path.join(self.config.index_dir, "documents.pkl")
+            if os.path.exists(docs_path):
+                with open(docs_path, "rb") as f:
+                    old_docs = pickle.load(f)
+
+            filtered_old = [
+                d for d in old_docs if d.metadata.get("relative_path", "") not in affected_paths
+            ]
+            all_docs = filtered_old + new_docs
+
+            self.vector_retriever = VectorRetriever()
+            self.vector_retriever.build_index(all_docs)
+
+            self.bm25_retriever = BM25Retriever()
+            self.bm25_retriever.build_index(all_docs)
+
+        from collections import Counter
+
+        domains = Counter(doc.metadata["domain"] for doc in all_docs)
+        self._stats = {
+            "total_notes": len(set(doc.metadata.get("relative_path", "") for doc in all_docs)),
+            "total_chunks": len(all_docs),
+            "domain_distribution": dict(domains.most_common()),
+        }
+
+        self.hybrid_retriever = HybridRetriever(self.vector_retriever, self.bm25_retriever)
+        self.rag_retriever = RAGRetriever(self.hybrid_retriever)
+
+        new_manifest = {}
+        for doc in all_docs:
+            rp = doc.metadata.get("relative_path", "")
+            h = doc.metadata.get("content_hash", "")
+            if rp and h:
+                new_manifest[rp] = h
+
+        if self.config.versioned:
+            version_id = self.save_index_versioned()
+            manifest_path = os.path.join(str(self.version_manager.get_version_path(version_id)), "manifest.json")
+            print(f"✅ {label}索引完成，新版本: {version_id}（共 {len(all_docs)} chunks）")
+        else:
+            self.save_index(self.config.index_dir)
+            manifest_path = os.path.join(self.config.index_dir, "manifest.json")
+            print(f"✅ {label}索引完成（共 {len(all_docs)} chunks）")
 
         with open(manifest_path, "w") as f:
             json.dump(new_manifest, f, ensure_ascii=False, indent=2)
@@ -487,8 +582,10 @@ class SecondBrainPipeline:
         """获取知识库统计信息"""
         return self._stats
 
-    def rebuild_index_from_vault(self, vault_path: str = None, chunk_size: int = None):
-        """从 vault 目录全量重建索引，支持多格式（.md / .pdf / .docx / .pptx / .xlsx）
+    def rebuild_index_from_vault(
+        self, vault_path: str = None, chunk_size: int = None, incremental: bool = False
+    ):
+        """从 vault 目录重建索引，支持多格式（.md / .pdf / .docx / .pptx / .xlsx）
 
         与 build_index() 的区别：
         - build_index() 使用 ObsidianParser，只处理 .md
@@ -501,6 +598,24 @@ class SecondBrainPipeline:
 
         print(f"📂 多格式解析 vault: {vault_path}")
         router = DocumentRouter(vault_path, use_obsidian=True)
+
+        if incremental:
+            manifest_path = os.path.join(self.config.index_dir, "manifest.json")
+            manifest = {}
+            if os.path.exists(manifest_path):
+                with open(manifest_path, "r") as f:
+                    manifest = json.load(f)
+
+            print(f"📂 多格式增量解析（已有 {len(manifest)} 个文件记录）...")
+            changed_docs, deleted = router.parse_directory_incremental(manifest)
+            print(f"📄 新增/变更: {len(changed_docs)} 个文档，删除: {len(deleted)} 个文档")
+            if not changed_docs and not deleted:
+                print("✅ 无变更，跳过索引重建")
+                return self._stats
+            return self._apply_incremental_documents(
+                changed_docs, deleted, chunk_size, label="多格式增量"
+            )
+
         parsed_docs = router.parse_directory(vault_path)
         print(f"📄 解析到 {len(parsed_docs)} 个文档")
 

@@ -164,14 +164,14 @@ class VaultWatcher:
             full_rebuild = self._pending_full_rebuild
             self._pending_full_rebuild = False
             if full_rebuild:
-                log.info("[VaultWatcher] 开始全量索引重建...")
+                log.info("[VaultWatcher] 开始多格式增量索引重建...")
             else:
                 log.info("[VaultWatcher] 开始增量索引重建...")
             start_time = time.time()
 
             try:
                 if full_rebuild:
-                    stats = self.pipeline.rebuild_index_from_vault()
+                    stats = self.pipeline.rebuild_index_from_vault(incremental=True)
                 else:
                     stats = self.pipeline.build_index(incremental=True)
                 elapsed = time.time() - start_time

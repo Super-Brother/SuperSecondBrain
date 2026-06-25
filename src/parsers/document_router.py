@@ -99,3 +99,83 @@ class DocumentRouter:
             all_docs.extend(docs)
 
         return all_docs
+
+    def parse_directory_incremental(
+        self,
+        manifest: dict[str, str],
+        dir_path: str | None = None,
+        include_types: list[str] | None = None,
+        exclude_dirs: list[str] | None = None,
+    ) -> tuple[list[Document], list[str]]:
+        """Parse only new/changed supported files and report deleted paths."""
+        if exclude_dirs is None:
+            exclude_dirs = [".git", ".obsidian", ".trash", "__pycache__"]
+
+        target_path = Path(dir_path).resolve() if dir_path else self.base_path
+        include_set = {ext.lower() for ext in include_types} if include_types else None
+
+        current_files: dict[str, Path] = {}
+        for path in target_path.rglob("*"):
+            if path.is_dir():
+                continue
+            if any(part in exclude_dirs for part in path.parts):
+                continue
+            ext = path.suffix.lower()
+            if ext not in PARSER_MAP:
+                continue
+            if include_set is not None and ext not in include_set:
+                continue
+            try:
+                rel_path = str(path.resolve().relative_to(self.base_path))
+            except ValueError:
+                rel_path = path.name
+            current_files[rel_path] = path
+
+        deleted = []
+        for rel_path in manifest:
+            ext = Path(rel_path).suffix.lower()
+            if ext not in PARSER_MAP:
+                continue
+            if include_set is not None and ext not in include_set:
+                continue
+            if rel_path not in current_files:
+                deleted.append(rel_path)
+
+        changed_docs: list[Document] = []
+        obs_parser = None
+        if self.use_obsidian and (target_path / ".obsidian").exists():
+            obs_parser = ObsidianParser(str(target_path))
+
+        for rel_path, path in current_files.items():
+            try:
+                if obs_parser is not None and path.suffix.lower() in OBSIDIAN_EXTENSIONS:
+                    note = obs_parser.parse_file(str(path))
+                    doc = Document(
+                        title=note.title,
+                        content=note.content,
+                        source_file=note.source_file,
+                        relative_path=note.relative_path,
+                        folder=note.folder,
+                        tags=note.tags,
+                        date=note.date,
+                        content_hash=note.content_hash,
+                        metadata={
+                            "outbound_links": note.outbound_links,
+                            "headings": note.headings,
+                        },
+                    )
+                else:
+                    parsed = self.parse_file(str(path))
+                    if parsed is None:
+                        continue
+                    doc = parsed
+
+                if len(doc.content) <= 10:
+                    continue
+                if manifest.get(rel_path) == doc.content_hash:
+                    continue
+                changed_docs.append(doc)
+            except Exception as e:
+                print(f"[WARN] 解析失败 {path}: {e}")
+
+        return changed_docs, deleted
