@@ -3,6 +3,7 @@
 .idea
 __pycache__/
 *.pyc
+.DS_Store
 data/index/
 .claude
 .gradio

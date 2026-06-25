@@ -1,4 +1,5 @@
 import time
+from threading import Event
 
 from src.utils.background_tasks import TaskRegistry
 
@@ -35,3 +36,26 @@ def test_task_registry_records_failure():
     assert finished.status == "failed"
     assert finished.error == "bad task"
     assert finished.progress == 1.0
+
+
+def test_start_unique_reuses_active_task():
+    registry = TaskRegistry()
+    started = Event()
+    release = Event()
+
+    def blocked_task():
+        started.set()
+        release.wait(timeout=2)
+        return {"ok": True}
+
+    first = registry.start_unique("index_build", blocked_task)
+    assert started.wait(timeout=1)
+
+    duplicate = registry.start_unique("index_build", blocked_task)
+    assert duplicate.task_id == first.task_id
+
+    release.set()
+    wait_for_done(registry, first.task_id)
+
+    next_task = registry.start_unique("index_build", lambda: {"ok": True})
+    assert next_task.task_id != first.task_id

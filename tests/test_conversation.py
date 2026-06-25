@@ -1,5 +1,7 @@
 """Tests for conversation persistence."""
 
+from concurrent.futures import ThreadPoolExecutor
+
 from src.models.conversation import ConversationManager
 
 
@@ -58,3 +60,17 @@ def test_archive_filter_and_restore_session(tmp_path):
 
     assert manager.list_sessions()[0]["session_id"] == session_id
     assert manager.list_sessions(archived=True) == []
+
+
+def test_conversation_manager_supports_background_thread_access(tmp_path):
+    manager = ConversationManager(str(tmp_path / "conversations.db"))
+    session_id = manager.create_session()
+
+    def add_and_read():
+        manager.add_message(session_id, "user", "飞书后台线程消息")
+        return manager.get_history(session_id)
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        messages = executor.submit(add_and_read).result()
+
+    assert messages[0].content == "飞书后台线程消息"

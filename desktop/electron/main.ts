@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { spawn, type ChildProcess } from "node:child_process";
+import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,6 +12,14 @@ let backendBaseUrl = "";
 
 function repoRoot(): string {
   return path.resolve(__dirname, "..", "..");
+}
+
+function packagedBackendExecutable(): string {
+  const onedirExecutable = path.join(process.resourcesPath, "secondbrain-backend", "secondbrain-backend");
+  if (fs.existsSync(onedirExecutable)) {
+    return onedirExecutable;
+  }
+  return path.join(process.resourcesPath, "secondbrain-backend");
 }
 
 async function getFreePort(): Promise<number> {
@@ -42,9 +51,7 @@ async function waitForHealth(baseUrl: string): Promise<void> {
   throw new Error("Backend did not become healthy within 120s");
 }
 
-async function startBackend(): Promise<void> {
-  const port = await getFreePort();
-  backendBaseUrl = `http://127.0.0.1:${port}`;
+async function startBackend(port: number): Promise<void> {
   const userDataDir = app.getPath("userData");
 
   if (!app.isPackaged) {
@@ -73,7 +80,7 @@ async function startBackend(): Promise<void> {
       }
     );
   } else {
-    const executable = path.join(process.resourcesPath, "secondbrain-backend");
+    const executable = packagedBackendExecutable();
     backendProcess = spawn(
       executable,
       ["--port", String(port), "--user-data-dir", userDataDir],
@@ -99,7 +106,11 @@ function stopBackend(): void {
 }
 
 async function createWindow(): Promise<void> {
-  await startBackend();
+  const port = await getFreePort();
+  backendBaseUrl = `http://127.0.0.1:${port}`;
+  void startBackend(port).catch((error) => {
+    console.error("Failed to start backend:", error);
+  });
 
   const win = new BrowserWindow({
     width: 1280,
@@ -108,7 +119,7 @@ async function createWindow(): Promise<void> {
     minHeight: 680,
     title: "SecondBrain Chat",
     webPreferences: {
-      preload: path.join(__dirname, "preload.js"),
+      preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
       nodeIntegration: false
     }

@@ -87,7 +87,8 @@ async def import_data(body: ImportDataRequest):
             continue
 
         dst = (paths.config_dir / item) if item == "model_config.json" else (paths.user_data_dir / item)
-        if dst.exists() and not body.overwrite:
+        dst_is_empty_dir = dst.is_dir() and not any(dst.iterdir())
+        if dst.exists() and not body.overwrite and not dst_is_empty_dir:
             skipped.append(item)
             warnings.append(f"{item} already exists; pass overwrite=true to replace it")
             continue
@@ -110,15 +111,14 @@ async def import_data(body: ImportDataRequest):
 
 @router.post("/index/build")
 async def start_index_build():
-    from src.api.app import pipeline
+    from src.api.app import ensure_pipeline
 
-    if pipeline is None:
-        return JSONResponse(status_code=503, content={"error": "Pipeline not initialized"})
+    pipeline = ensure_pipeline()
 
     def build():
         return pipeline.rebuild_index_from_vault()
 
-    task = task_registry.start("index_build", build)
+    task = task_registry.start_unique("index_build", build)
     return {"task_id": task.task_id, "status": task.status}
 
 

@@ -66,7 +66,23 @@ class DocumentRouter:
         parsed_obsidian_markdown = False
         if self.use_obsidian and (target_path / ".obsidian").exists():
             obs_parser = ObsidianParser(str(target_path))
-            all_docs.extend(obs_parser.parse_vault())
+            for note in obs_parser.parse_vault():
+                all_docs.append(
+                    Document(
+                        title=note.title,
+                        content=note.content,
+                        source_file=note.source_file,
+                        relative_path=note.relative_path,
+                        folder=note.folder,
+                        tags=note.tags,
+                        date=note.date,
+                        content_hash=note.content_hash,
+                        metadata={
+                            "outbound_links": note.outbound_links,
+                            "headings": note.headings,
+                        },
+                    )
+                )
             parsed_obsidian_markdown = True
 
         for ext in PARSER_MAP:

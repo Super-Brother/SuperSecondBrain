@@ -90,6 +90,22 @@ class TestSetupLogger:
         content = log_file.read_text()
         assert "测试写入文件" in content
 
+    def test_desktop_log_file_uses_user_data_dir(self, tmp_path, monkeypatch):
+        """桌面端日志不应依赖 GUI 进程的当前工作目录"""
+        working_dir = tmp_path / "working"
+        user_data_dir = tmp_path / "user-data"
+        working_dir.mkdir()
+        monkeypatch.chdir(working_dir)
+        monkeypatch.setenv("SECONDBRAIN_DESKTOP_MODE", "1")
+        monkeypatch.setenv("SECONDBRAIN_USER_DATA_DIR", str(user_data_dir))
+
+        logger = setup_logger("test_desktop_file")
+        logger.info("桌面日志")
+
+        log_file = user_data_dir / "logs" / "secondbrain.log"
+        assert log_file.exists()
+        assert not (working_dir / "data").exists()
+
     def test_json_format_from_env(self, tmp_path, monkeypatch):
         """LOG_FORMAT=json 时应输出 JSON"""
         monkeypatch.chdir(tmp_path)

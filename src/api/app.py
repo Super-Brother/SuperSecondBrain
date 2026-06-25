@@ -3,23 +3,24 @@
 import faulthandler
 import os
 
-# macOS MPS 内存分配器在模型预热时可能触发段错误，完全禁用 MPS 避免崩溃
-os.environ.setdefault("PYTORCH_MPS_HIGH_WATERMARK_RATIO", "0.0")
+# macOS MPS 内存分配器在模型预热/向量化时可能触发段错误；若显式启用 MPS，则保留上限。
+os.environ.setdefault("PYTORCH_MPS_HIGH_WATERMARK_RATIO", "0.7")
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 # 避免 huggingface/tokenizers 在 fork 后启用并行导致死锁/段错误
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
-# Apple Silicon 上使用 MPS 加速 embedding；SentenceTransformer 启动时会读取该变量
-os.environ.setdefault("EMBEDDING_DEVICE", "mps")
+# 长驻服务默认用 CPU 做 embedding，更稳且避免 MPS 原生内存峰值；需要时可用环境变量改为 mps/cuda。
+os.environ.setdefault("EMBEDDING_DEVICE", "cpu")
 # 增量重建时避免语义切分对每个句子计算 embedding，确保快速完成
 os.environ.setdefault("SPLIT_STRATEGY", "legacy")
 # 控制 embedding batch size
-os.environ.setdefault("EMBEDDING_BATCH_SIZE", "64")
+os.environ.setdefault("EMBEDDING_BATCH_SIZE", "32")
 
 faulthandler.enable()
 
-# 关键：在 jieba 等多线程库之前先初始化 torch，
-# 避免 PyTorch 线程状态与 jieba 多线程冲突导致的段错误 (macOS)
-import torch  # noqa: F401
+# 服务端模式下先初始化 torch，避免 PyTorch 线程状态与 jieba/faiss 多线程冲突。
+# 桌面端优先保证本地 API 快速就绪，模型相关依赖在实际检索/索引时再加载。
+if os.getenv("SECONDBRAIN_DESKTOP_MODE", "").lower() not in {"1", "true", "yes"}:
+    import torch  # noqa: F401
 
 import hashlib
 import hmac
@@ -27,10 +28,13 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
 import uuid
+from collections import OrderedDict
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
 from dotenv import load_dotenv
 
@@ -52,8 +56,6 @@ from slowapi.errors import RateLimitExceeded
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from src.retrievers.pipeline import SecondBrainPipeline, PipelineConfig
-from src.retrievers.rag_retriever import SearchConfig
 from src.models.conversation import ConversationManager
 from src.utils.logger import log
 from src.utils.cache import ResponseCache
@@ -62,6 +64,11 @@ from src.api.auth import APIKeyMiddleware
 from src.api.static import HTML_TEMPLATE
 from src.api.notes_routes import router as notes_router
 from src.api.desktop_routes import router as desktop_router
+from src.integrations.feishu import (
+    FeishuAPIClient,
+    FeishuConfig,
+    FeishuEventHandler,
+)
 from src.utils.vault_watcher import VaultWatcher
 from src.utils.vault_git import GitSyncError, pull_vault
 from src.utils.app_paths import ensure_app_dirs, get_app_paths, is_desktop_mode
@@ -74,6 +81,7 @@ from src.utils.model_config_store import (
 from src.utils.metrics import get_metrics
 from src.utils.audit_logger import audit_log, AuditAction
 from src.utils.circuit_breaker import CircuitBreakerOpen
+from src.utils.sanitizer import sanitize_text
 
 # slowapi 存储后端：优先 Redis，否则内存
 redis_url = os.getenv("REDIS_URL")
@@ -106,17 +114,58 @@ MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50MB
 
 # ---- 全局状态 ----
 
-pipeline: SecondBrainPipeline = None
+class ThreadSafeBoundedSet:
+    """线程安全的有界集合，用于飞书消息去重。"""
+
+    def __init__(self, max_size: int = 10000):
+        self._max_size = max_size
+        self._data: OrderedDict[str, None] = OrderedDict()
+        self._lock = threading.Lock()
+
+    def __contains__(self, item: str) -> bool:
+        with self._lock:
+            return item in self._data
+
+    def add(self, item: str) -> None:
+        with self._lock:
+            if item in self._data:
+                self._data.move_to_end(item)
+                return
+            self._data[item] = None
+            if len(self._data) > self._max_size:
+                self._data.popitem(last=False)
+
+
+SecondBrainPipeline: Any = None
+PipelineConfig: Any = None
+pipeline: Any = None
 conv_manager: ConversationManager = None
 response_cache: ResponseCache = None
 vault_watcher: VaultWatcher = None
+feishu_processed_message_ids = ThreadSafeBoundedSet(max_size=10000)
+feishu_ws_thread: threading.Thread | None = None
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    global pipeline, conv_manager, response_cache, vault_watcher, VAULT_PATH, INDEX_DIR
+def _load_pipeline_types():
+    global SecondBrainPipeline, PipelineConfig
 
-    # 桌面模式：解析用户数据目录并加载桌面配置
+    if SecondBrainPipeline is None or PipelineConfig is None:
+        from src.retrievers.pipeline import (
+            SecondBrainPipeline as PipelineClass,
+            PipelineConfig as ConfigClass,
+        )
+
+        if SecondBrainPipeline is None:
+            SecondBrainPipeline = PipelineClass
+        if PipelineConfig is None:
+            PipelineConfig = ConfigClass
+
+
+def _resolve_pipeline_config() -> PipelineConfig:
+    """解析并构建 PipelineConfig，供 lifespan 和 ensure_pipeline 复用。"""
+    global VAULT_PATH
+
+    _load_pipeline_types()
     paths = ensure_app_dirs()
     desktop_cfg = load_desktop_config() if is_desktop_mode() else None
     if desktop_cfg:
@@ -125,7 +174,6 @@ async def lifespan(app: FastAPI):
         os.environ.setdefault("EMBEDDING_MODEL", desktop_cfg.embedding_model)
         os.environ.setdefault("RERANKER_MODEL", desktop_cfg.reranker_model)
 
-    # 优先使用持久化的模型配置；不存在则回退到环境变量
     stored = load_model_config()
     if stored:
         llm_base_url = stored.base_url
@@ -142,21 +190,40 @@ async def lifespan(app: FastAPI):
         llm_api_key = desktop_cfg.llm_api_key
         llm_model = desktop_cfg.llm_model
 
-    vault_path = desktop_cfg.vault_path if desktop_cfg and desktop_cfg.vault_path else VAULT_PATH
-    index_dir = str(paths.index_dir) if is_desktop_mode() else INDEX_DIR
-    embedding_model = desktop_cfg.embedding_model if desktop_cfg else os.getenv("EMBEDDING_MODEL", "BAAI/bge-large-zh-v1.5")
-    reranker_model = desktop_cfg.reranker_model if desktop_cfg else os.getenv("RERANKER_MODEL", "BAAI/bge-reranker-base")
-
-    config = PipelineConfig(
-        vault_path=vault_path,
-        index_dir=index_dir,
+    return PipelineConfig(
+        vault_path=desktop_cfg.vault_path if desktop_cfg and desktop_cfg.vault_path else VAULT_PATH,
+        index_dir=str(paths.index_dir) if is_desktop_mode() else INDEX_DIR,
         llm_base_url=llm_base_url,
         llm_api_key=llm_api_key,
         llm_model=llm_model,
-        embedding_model=embedding_model,
-        reranker_model=reranker_model,
+        embedding_model=desktop_cfg.embedding_model if desktop_cfg else os.getenv("EMBEDDING_MODEL", "BAAI/bge-large-zh-v1.5"),
+        reranker_model=desktop_cfg.reranker_model if desktop_cfg else os.getenv("RERANKER_MODEL", "BAAI/bge-reranker-base"),
     )
+
+
+def ensure_pipeline():
+    """Create the RAG pipeline lazily for desktop actions such as index build."""
+    global pipeline
+
+    if pipeline is not None:
+        return pipeline
+
+    config = _resolve_pipeline_config()
     pipeline = SecondBrainPipeline(config)
+    return pipeline
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global pipeline, conv_manager, response_cache, vault_watcher, VAULT_PATH, INDEX_DIR
+
+    config = _resolve_pipeline_config()
+    index_path = Path(config.index_dir)
+    if is_desktop_mode() and not (index_path / "faiss.index").exists():
+        pipeline = None
+        log.warning("未找到索引，请在桌面端完成引导后构建索引")
+    else:
+        pipeline = SecondBrainPipeline(config)
     conv_manager = ConversationManager()
     redis_url = os.getenv("REDIS_URL")
     if redis_url:
@@ -172,26 +239,28 @@ async def lifespan(app: FastAPI):
     else:
         response_cache = ResponseCache(max_size=256, ttl_seconds=int(os.getenv("CACHE_TTL", "3600")))
 
-    index_path = Path(index_dir)
-    if (index_path / "faiss.index").exists():
-        log.info("加载已有索引: %s", index_dir)
-        pipeline.load_index(index_dir)
-        # 预热模型（避免首次请求时加载导致的长时间等待）
-        log.info("正在预热模型（Reranker / Embedding / LLM）...")
-        pipeline.warmup()
-        log.info("预热完成，服务就绪")
-    else:
+    if pipeline is not None and (index_path / "faiss.index").exists():
+        log.info("加载已有索引: %s", config.index_dir)
+        pipeline.load_index(config.index_dir)
+        if not is_desktop_mode():
+            # 预热模型（避免首次请求时加载导致的长时间等待）
+            log.info("正在预热模型（Reranker / Embedding / LLM）...")
+            pipeline.warmup()
+            log.info("预热完成，服务就绪")
+    elif not is_desktop_mode():
         log.warning("未找到索引，请运行: python scripts/build_index.py")
 
     # 启动 Vault 自动同步
     auto_sync = os.getenv("AUTO_SYNC", "false").lower() in ("true", "1", "yes")
-    if auto_sync:
+    if auto_sync and pipeline is not None:
         debounce = float(os.getenv("AUTO_SYNC_DEBOUNCE", "5.0"))
         vault_watcher = VaultWatcher(VAULT_PATH, pipeline, debounce_seconds=debounce)
         try:
             vault_watcher.start()
         except FileNotFoundError:
             log.warning("Vault 路径不存在，自动同步未启动: %s", VAULT_PATH)
+
+    _start_feishu_ws_background()
 
     yield
 
@@ -385,6 +454,8 @@ def _sources_for_query(query: str) -> list[dict]:
     if not query or pipeline is None or pipeline.rag_retriever is None:
         return []
     try:
+        from src.retrievers.rag_retriever import SearchConfig
+
         config = SearchConfig(
             top_k=pipeline.config.default_top_k,
             rerank_top_k=pipeline.config.default_rerank_top_k,
@@ -403,6 +474,129 @@ def _sources_for_query(query: str) -> list[dict]:
         }
         for doc, score in results
     ]
+
+
+def _ask_knowledge_for_feishu(
+    query: str,
+    session_id: str,
+    context: dict[str, Any],
+) -> dict[str, Any]:
+    if pipeline is None or pipeline.rag_retriever is None:
+        return {
+            "query": query,
+            "answer": "知识库索引未加载，请先构建索引。",
+            "sources": [],
+        }
+
+    cached = response_cache.get(query, None) if response_cache else None
+    if cached:
+        log.info("飞书机器人缓存命中: %s", query[:30])
+        _save_turn(session_id, query, cached["answer"], cached.get("sources"))
+        return cached
+
+    history = _get_history(session_id)
+    result = pipeline.chat(
+        query=query,
+        domain=None,
+        top_k=None,
+        history=history,
+    )
+    _save_turn(session_id, query, result["answer"], result.get("sources"))
+
+    if response_cache:
+        response_cache.put(query, result, None)
+
+    audit_log(
+        AuditAction.CHAT,
+        None,
+        details={
+            "source": "feishu",
+            "query": sanitize_text(query[:200]),
+            "session_id": session_id,
+            **context,
+        },
+        status="success",
+    )
+    return result
+
+
+def create_feishu_handler(request: Request) -> FeishuEventHandler:
+    config = FeishuConfig.from_env()
+    client = FeishuAPIClient(config)
+
+    def record_audit(details: dict[str, Any], status: str) -> None:
+        audit_log(
+            AuditAction.CHAT,
+            request,
+            details={"source": "feishu", **details},
+            status=status,
+        )
+
+    return FeishuEventHandler(
+        config=config,
+        client=client,
+        ask_knowledge=_ask_knowledge_for_feishu,
+        audit_recorder=record_audit,
+        processed_message_ids=feishu_processed_message_ids,
+    )
+
+
+def _start_feishu_ws_background() -> threading.Thread | None:
+    global feishu_ws_thread
+
+    enabled = os.getenv("FEISHU_WS_AUTOSTART", "false").lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+    if not enabled:
+        return None
+    if feishu_ws_thread is not None and feishu_ws_thread.is_alive():
+        return feishu_ws_thread
+
+    config = FeishuConfig.from_env()
+    if not config.enabled:
+        log.warning("FEISHU_WS_AUTOSTART=true 但 FEISHU_BOT_ENABLED 未启用，跳过飞书长连接")
+        return None
+    if not config.app_id or not config.app_secret:
+        log.warning("FEISHU_WS_AUTOSTART=true 但 FEISHU_APP_ID/FEISHU_APP_SECRET 未配置，跳过飞书长连接")
+        return None
+
+    def run_worker_loop():
+        retry_delay = 5
+        max_retry_delay = 60
+        while True:
+            try:
+                from src.integrations.feishu_ws import FeishuWsWorker
+
+                worker = FeishuWsWorker(
+                    config=config,
+                    client=FeishuAPIClient(config),
+                    ask_knowledge=_ask_knowledge_for_feishu,
+                    audit_recorder=lambda details, status: audit_log(
+                        AuditAction.CHAT,
+                        None,
+                        details={"source": "feishu_ws", **details},
+                        status=status,
+                    ),
+                    processed_message_ids=feishu_processed_message_ids,
+                    log_level=os.getenv("FEISHU_LOG_LEVEL", "INFO").upper(),
+                )
+                worker.start()
+            except Exception as exc:
+                log.exception("飞书长连接后台线程退出: %s", exc)
+            log.info("飞书长连接将在 %s 秒后重连", retry_delay)
+            time.sleep(retry_delay)
+            retry_delay = min(retry_delay * 2, max_retry_delay)
+
+    feishu_ws_thread = threading.Thread(
+        target=run_worker_loop,
+        name="feishu-ws-worker",
+        daemon=True,
+    )
+    feishu_ws_thread.start()
+    log.info("飞书长连接后台线程已启动")
+    return feishu_ws_thread
 
 
 # ---- API ----
@@ -444,6 +638,14 @@ async def prometheus_metrics():
     from fastapi.responses import PlainTextResponse
     metrics = get_metrics()
     return PlainTextResponse(content=metrics.to_prometheus(), media_type="text/plain")
+
+
+@app.post("/api/v1/integrations/feishu/events")
+@limiter.limit("10/minute")
+async def feishu_events(request: Request):
+    payload = await request.json()
+    result = create_feishu_handler(request).handle_callback(payload)
+    return JSONResponse(status_code=result.status_code, content=result.body)
 
 
 @app.post("/api/v1/sessions", response_model=SessionResponse)

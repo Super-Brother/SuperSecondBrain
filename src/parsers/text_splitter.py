@@ -666,11 +666,17 @@ def create_text_splitter(
 
 
 def split_note_to_chunks(note, splitter) -> list[Document]:
-    """将单篇 Obsidian 笔记切分为 chunks"""
+    """将单篇解析文档切分为 chunks"""
     from src.parsers.obsidian_parser import classify_domain
 
     chunks = splitter.split_text(note.content)
     documents: list[Document] = []
+    extra_metadata = dict(getattr(note, "metadata", {}) or {})
+    outbound_links = getattr(
+        note,
+        "outbound_links",
+        extra_metadata.get("outbound_links", []),
+    )
 
     for i, chunk_text in enumerate(chunks):
         if len(chunk_text.strip()) < 20:
@@ -688,6 +694,7 @@ def split_note_to_chunks(note, splitter) -> list[Document]:
                 clean_text = chunk_text[end_idx + 2 :]
 
         metadata = {
+            **extra_metadata,
             "source_file": note.source_file,
             "relative_path": note.relative_path,
             "folder": note.folder,
@@ -697,7 +704,7 @@ def split_note_to_chunks(note, splitter) -> list[Document]:
             "date": note.date,
             "chunk_index": i,
             "total_chunks": len(chunks),
-            "outbound_links": note.outbound_links,
+            "outbound_links": outbound_links,
             "content_hash": note.content_hash,
             "context": context,
         }

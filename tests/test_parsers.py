@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from src.parsers.base_parser import Document
 from src.parsers.obsidian_parser import ObsidianParser, ObsidianNote, classify_domain, DOMAIN_MAP
 from src.parsers.document_router import DocumentRouter
 
@@ -141,8 +142,16 @@ class TestDocumentRouterObsidianMixedFormats:
         md_file.write_text("# 标题\n" + "正文内容" * 10, encoding="utf-8")
         pdf_file.write_bytes(b"%PDF-1.4 fake")
 
-        obs_note = MagicMock()
-        obs_note.relative_path = "note.md"
+        obs_note = ObsidianNote(
+            title="标题",
+            content="正文内容" * 10,
+            raw_content="# 标题\n" + "正文内容" * 10,
+            source_file=str(md_file),
+            relative_path="note.md",
+            folder="root",
+            outbound_links=["另一篇笔记"],
+            content_hash="hash",
+        )
 
         pdf_doc = MagicMock()
         pdf_doc.metadata = {"source_file": str(pdf_file), "format": "pdf"}
@@ -163,6 +172,10 @@ class TestDocumentRouterObsidianMixedFormats:
 
                 docs = router.parse_directory(str(tmp_path))
 
-        assert docs == [obs_note, pdf_doc]
+        assert len(docs) == 2
+        assert isinstance(docs[0], Document)
+        assert docs[0].relative_path == "note.md"
+        assert docs[0].metadata["outbound_links"] == ["另一篇笔记"]
+        assert docs[1] is pdf_doc
         obs_cls.return_value.parse_vault.assert_called_once()
         mock_get.assert_any_call(".pdf")

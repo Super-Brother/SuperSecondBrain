@@ -18,6 +18,8 @@ import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
+from src.utils.app_paths import get_app_paths, is_desktop_mode
+
 
 class JSONFormatter(logging.Formatter):
     """JSON 结构化日志格式器"""
@@ -70,7 +72,7 @@ def setup_logger(name: str = "secondbrain") -> logging.Logger:
     logger.addHandler(stream_handler)
 
     # 文件 Handler（RotatingFileHandler）
-    log_dir = Path("data/logs")
+    log_dir = get_app_paths().logs_dir if is_desktop_mode() else Path("data/logs")
     log_dir.mkdir(parents=True, exist_ok=True)
     max_bytes = int(os.getenv("LOG_MAX_BYTES", "10485760"))  # 默认 10MB
     backup_count = int(os.getenv("LOG_BACKUP_COUNT", "5"))

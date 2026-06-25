@@ -16,9 +16,10 @@ from pathlib import Path
 
 import numpy as np
 
-# macOS 上必须先初始化 torch，再导入 faiss/jieba，
-# 避免 PyTorch 线程状态与 faiss/jieba 多线程冲突导致的段错误
-import torch  # noqa: F401
+# macOS 服务端模式下必须先初始化 torch，再导入 faiss/jieba，避免线程状态冲突。
+# 桌面端启动时跳过，避免 Electron 长时间停在“本地后端正在启动”。
+if os.getenv("SECONDBRAIN_DESKTOP_MODE", "").lower() not in {"1", "true", "yes"}:
+    import torch  # noqa: F401
 
 import faiss
 import jieba
@@ -86,14 +87,15 @@ class VectorRetriever:
         """构建向量索引"""
         print(f"[VectorRetriever] 正在对 {len(documents)} 个 chunks 做 Embedding...")
         texts = [doc.page_content for doc in documents]
-        batch_size = int(os.getenv("EMBEDDING_BATCH_SIZE", "64"))
+        batch_size = int(os.getenv("EMBEDDING_BATCH_SIZE", "32"))
         embeddings = self.embedder.encode(texts, show_progress_bar=True, batch_size=batch_size)
 
         if self.embedding_dim is None:
             self.embedding_dim = embeddings.shape[1]
             print(f"[VectorRetriever] Embedding 维度: {self.embedding_dim}")
 
-        self.store.add_documents(documents, embeddings=embeddings.tolist())
+        store_embeddings = embeddings.tolist() if self.backend == "milvus" else embeddings
+        self.store.add_documents(documents, embeddings=store_embeddings)
         stats = self.store.get_stats()
         print(f"[VectorRetriever] 索引构建完成，共 {stats.get('total_vectors', 0)} 个向量")
 
@@ -104,13 +106,14 @@ class VectorRetriever:
 
         print(f"[VectorRetriever] 正在对 {len(documents)} 个新增 chunks 做 Embedding...")
         texts = [doc.page_content for doc in documents]
-        batch_size = int(os.getenv("EMBEDDING_BATCH_SIZE", "64"))
+        batch_size = int(os.getenv("EMBEDDING_BATCH_SIZE", "32"))
         embeddings = self.embedder.encode(texts, show_progress_bar=True, batch_size=batch_size)
 
         if self.embedding_dim is None:
             self.embedding_dim = embeddings.shape[1]
 
-        self.store.add_documents(documents, embeddings=embeddings.tolist())
+        store_embeddings = embeddings.tolist() if self.backend == "milvus" else embeddings
+        self.store.add_documents(documents, embeddings=store_embeddings)
         stats = self.store.get_stats()
         print(f"[VectorRetriever] 追加完成，共 {stats.get('total_vectors', 0)} 个向量")
 

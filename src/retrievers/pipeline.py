@@ -501,8 +501,16 @@ class SecondBrainPipeline:
 
         print(f"📂 多格式解析 vault: {vault_path}")
         router = DocumentRouter(vault_path, use_obsidian=True)
-        all_docs = router.parse_directory(vault_path)
-        print(f"📄 解析到 {len(all_docs)} 个文档 chunks")
+        parsed_docs = router.parse_directory(vault_path)
+        print(f"📄 解析到 {len(parsed_docs)} 个文档")
+
+        print(f"✂️  切分文档（chunk_size={chunk_size}）...")
+        all_docs = split_notes_to_documents(
+            parsed_docs,
+            chunk_size=chunk_size,
+            chunk_overlap=self.config.chunk_overlap,
+        )
+        print(f"📝 切分为 {len(all_docs)} 个 chunks")
 
         # 补齐元数据（与 Obsidian 解析路径对齐）
         from src.parsers.obsidian_parser import classify_domain

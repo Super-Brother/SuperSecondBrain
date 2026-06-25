@@ -1,9 +1,11 @@
 """会话管理器 — 基于 SQLite 的多轮对话持久化"""
 
 import sqlite3
+import threading
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
+import functools
 import json
 from pathlib import Path
 from typing import Optional
@@ -23,7 +25,8 @@ class ConversationManager:
     def __init__(self, db_path: str | None = None):
         db_path = db_path or str(get_app_paths().conversations_db)
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(db_path)
+        self._lock = threading.RLock()
+        self.conn = sqlite3.connect(db_path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self._init_db()
 
@@ -207,3 +210,31 @@ class ConversationManager:
             timestamp=row["timestamp"],
             metadata=metadata,
         )
+
+
+def _locked_conversation_method(method):
+    @functools.wraps(method)
+    def wrapped(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+
+    return wrapped
+
+
+for _method_name in (
+    "create_session",
+    "add_message",
+    "get_history",
+    "delete_session",
+    "list_sessions",
+    "get_message_count",
+    "rename_session",
+    "archive_session",
+    "restore_session",
+    "get_history_slice",
+):
+    setattr(
+        ConversationManager,
+        _method_name,
+        _locked_conversation_method(getattr(ConversationManager, _method_name)),
+    )

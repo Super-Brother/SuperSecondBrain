@@ -14,6 +14,53 @@ body {
   padding: 32px;
 }
 
+.startup-screen {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.startup-card {
+  width: min(420px, 100%);
+  padding: 28px;
+  border: 1px solid #2b2e36;
+  border-radius: 14px;
+  background: #181a1f;
+  text-align: center;
+}
+
+.startup-card h1 {
+  margin: 0 0 10px;
+  font-size: 24px;
+}
+
+.startup-card p {
+  margin: 0;
+  color: #9ba3af;
+}
+
+.startup-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-top: 18px;
+  border-radius: 999px;
+  background: #3b82f6;
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.85);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
 .onboarding {
   min-height: 100vh;
   display: flex;

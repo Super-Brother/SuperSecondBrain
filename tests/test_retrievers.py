@@ -2,6 +2,7 @@
 
 import sys
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
@@ -15,6 +16,7 @@ from src.retrievers.rag_retriever import (
     HybridRetriever,
     SearchConfig,
 )
+from src.retrievers.pipeline import PipelineConfig, SecondBrainPipeline
 
 
 @pytest.fixture
@@ -117,3 +119,39 @@ class TestHybridRetriever:
         results = hybrid.search("编程语言", SearchConfig(top_k=5, rerank_top_k=3))
         assert len(results) <= 3
         assert all(isinstance(doc, Document) for doc, score in results)
+
+
+class TestPipelineMultiFormatRebuild:
+    def test_obsidian_documents_are_split_before_indexing(self, tmp_path, monkeypatch):
+        vault = tmp_path / "vault"
+        index_dir = tmp_path / "index"
+        vault.mkdir()
+        (vault / ".obsidian").mkdir()
+        (vault / "note.md").write_text(
+            "# 测试笔记\n\n这是用于验证桌面端索引重建的正文内容。" * 4,
+            encoding="utf-8",
+        )
+
+        monkeypatch.setenv("SPLIT_STRATEGY", "legacy")
+        pipeline = SecondBrainPipeline(
+            PipelineConfig(vault_path=str(vault), index_dir=str(index_dir))
+        )
+        vector = MagicMock()
+        bm25 = MagicMock()
+
+        def create_index_dir(path):
+            Path(path).mkdir(parents=True, exist_ok=True)
+
+        monkeypatch.setattr(pipeline, "save_index", create_index_dir)
+
+        with patch("src.retrievers.pipeline.VectorRetriever", return_value=vector), \
+             patch("src.retrievers.pipeline.BM25Retriever", return_value=bm25), \
+             patch("src.retrievers.pipeline.HybridRetriever"), \
+             patch("src.retrievers.pipeline.RAGRetriever"):
+            stats = pipeline.rebuild_index_from_vault()
+
+        indexed_docs = vector.build_index.call_args.args[0]
+        assert stats["total_notes"] == 1
+        assert indexed_docs
+        assert all(isinstance(doc, Document) for doc in indexed_docs)
+        assert indexed_docs[0].metadata["relative_path"] == "note.md"

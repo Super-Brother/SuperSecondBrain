@@ -36,6 +36,19 @@ class TaskRegistry:
         thread.start()
         return task
 
+    def start_unique(self, kind: str, fn: Callable[[], dict[str, Any]]) -> BackgroundTask:
+        with self._lock:
+            for task in self._tasks.values():
+                if task.kind == kind and task.status in {"queued", "running"}:
+                    return task
+
+            task = BackgroundTask(task_id=str(uuid.uuid4()), kind=kind)
+            self._tasks[task.task_id] = task
+
+        thread = threading.Thread(target=self._run, args=(task.task_id, fn), daemon=True)
+        thread.start()
+        return task
+
     def get(self, task_id: str) -> BackgroundTask | None:
         with self._lock:
             return self._tasks.get(task_id)

@@ -95,6 +95,26 @@ def test_desktop_import_data_copies_known_files(client, monkeypatch, tmp_path):
     assert (target / "index" / "stats.json").exists()
 
 
+def test_desktop_import_data_replaces_empty_index_directory(client, monkeypatch, tmp_path):
+    target = tmp_path / "target"
+    source = tmp_path / "source"
+    (target / "index").mkdir(parents=True)
+    (source / "index").mkdir(parents=True)
+    (source / "index" / "stats.json").write_text('{"total_notes": 1}', encoding="utf-8")
+
+    monkeypatch.setenv("SECONDBRAIN_DESKTOP_MODE", "1")
+    monkeypatch.setenv("SECONDBRAIN_USER_DATA_DIR", str(target))
+
+    response = client.post(
+        "/api/v1/desktop/import-data",
+        json={"source_data_dir": str(source), "overwrite": False},
+    )
+
+    assert response.status_code == 200
+    assert "index" in response.json()["copied"]
+    assert (target / "index" / "stats.json").exists()
+
+
 def test_desktop_import_data_rejects_missing_source(client, monkeypatch, tmp_path):
     monkeypatch.setenv("SECONDBRAIN_DESKTOP_MODE", "1")
     monkeypatch.setenv("SECONDBRAIN_USER_DATA_DIR", str(tmp_path))

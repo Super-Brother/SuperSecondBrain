@@ -13,6 +13,7 @@ hiddenimports += collect_submodules("transformers")
 hiddenimports += collect_submodules("langchain")
 hiddenimports += collect_submodules("langchain_community")
 hiddenimports += collect_submodules("langchain_core")
+hiddenimports += collect_submodules("src")
 
 repo_root = os.path.abspath(os.path.join(SPECPATH, "..", ".."))
 
@@ -33,9 +34,8 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
     [],
+    exclude_binaries=True,
     name="secondbrain-backend",
     debug=False,
     bootloader_ignore_signals=False,
@@ -49,4 +49,14 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    name="secondbrain-backend",
 )
