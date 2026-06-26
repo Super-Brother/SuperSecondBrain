@@ -3,7 +3,9 @@ from unittest.mock import MagicMock, patch
 
 from src.utils.vault_git import (
     GitSyncError,
+    changed_files_between,
     commit_and_push_vault_change,
+    get_head,
     pull_vault,
 )
 
@@ -89,3 +91,59 @@ def test_commit_and_push_raises_on_rebase_conflict(tmp_path, monkeypatch):
         assert False, "expected GitSyncError"
     except GitSyncError as exc:
         assert "CONFLICT" in str(exc)
+
+
+def test_get_head_returns_rev_parse_output(tmp_path):
+    (tmp_path / ".git").mkdir()
+
+    with patch("src.utils.vault_git.subprocess.run", return_value=_completed(stdout="abc1234\n")) as run:
+        head = get_head(str(tmp_path))
+
+    assert head == "abc1234"
+    run.assert_called_once_with(
+        ["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+
+
+def test_get_head_raises_when_not_git_repo(tmp_path):
+    try:
+        get_head(str(tmp_path))
+        assert False, "expected GitSyncError"
+    except GitSyncError as exc:
+        assert "not a git repository" in str(exc)
+
+
+def test_changed_files_between_parses_name_status(tmp_path):
+    (tmp_path / ".git").mkdir()
+
+    diff_output = "M\tmodified.md\nA\tadded.md\nD\tdeleted.md\nR100\told.md\tnew.md\n"
+
+    with patch("src.utils.vault_git.subprocess.run", return_value=_completed(stdout=diff_output)) as run:
+        changed, deleted = changed_files_between(str(tmp_path), "old", "new")
+
+    assert set(changed) == {"modified.md", "added.md", "new.md"}
+    assert deleted == ["deleted.md"]
+    run.assert_called_once_with(
+        ["git", "-C", str(tmp_path), "diff", "--name-status", "old", "new"],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+
+
+def test_changed_files_between_returns_empty_for_same_head(tmp_path):
+    (tmp_path / ".git").mkdir()
+    changed, deleted = changed_files_between(str(tmp_path), "same", "same")
+    assert changed == []
+    assert deleted == []
+
+
+def test_changed_files_between_raises_when_not_git_repo(tmp_path):
+    try:
+        changed_files_between(str(tmp_path), "old", "new")
+        assert False, "expected GitSyncError"
+    except GitSyncError as exc:
+        assert "not a git repository" in str(exc)
