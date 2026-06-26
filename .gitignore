@@ -18,7 +18,8 @@ models/*
 !models/.gitkeep
 
 node_modules
-/docs
+/docs/*
+!docs/server-git-incremental-indexing.md
 .codegraph
 build
 

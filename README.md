@@ -372,6 +372,27 @@ docker compose -f docker-compose.server.yml up -d
 
 **配置文件：** `.env.server`（参考 `.env.server.example`）
 
+### 服务器 Git 增量同步（个人服务器推荐）
+
+在个人服务器上，可通过 Git 定时拉取 vault 变更并触发 FAISS 增量索引重建：
+
+```bash
+# 首次全量构建（多格式）
+python scripts/build_index.py --source-dir /path/to/vault \
+  --include-types .md,.pdf,.docx,.pptx,.xlsx
+
+# 配置 systemd timer 后自动每 10 分钟同步一次
+sudo systemctl enable --now secondbrain-sync.timer
+
+# 手动执行一次同步
+python scripts/sync_vault_incremental.py
+```
+
+详细配置（systemd service/timer、环境变量、失败恢复）见：
+[docs/server-git-incremental-indexing.md](docs/server-git-incremental-indexing.md)
+
+> 本方案继续使用 FAISS 单机路线，不引入 Milvus。Milvus 是企业级规模化的可选升级路径。
+
 ### 企业级完整部署
 
 需要 GPU 服务器，包含 Milvus + vLLM 本地推理：
