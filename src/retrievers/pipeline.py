@@ -79,9 +79,20 @@ class SecondBrainPipeline:
             return self._build_index_incremental(parser, chunk_size)
         return self._build_index_full(parser, chunk_size)
 
+    @staticmethod
+    def _write_json_atomic(path: str, data: dict) -> None:
+        """原子写入 JSON 文件：先写临时文件，再 os.replace 到目标路径。
+
+        避免 manifest/stats 写入中断导致旧文件不可用。
+        """
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        temp_path = path + ".tmp"
+        with open(temp_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(temp_path, path)
+
     def _build_index_full(self, parser, chunk_size: int):
         """全量构建索引"""
-        print(f"📂 解析 Obsidian vault: {parser.vault_path}")
         notes = parser.parse_vault()
         print(f"📄 解析到 {len(notes)} 篇笔记")
 
@@ -124,8 +135,7 @@ class SecondBrainPipeline:
             manifest_path = os.path.join(self.config.index_dir, "manifest.json")
             print(f"✅ 索引构建完成，已保存到 {self.config.index_dir}")
 
-        with open(manifest_path, "w") as f:
-            json.dump(manifest, f, ensure_ascii=False, indent=2)
+        self._write_json_atomic(manifest_path, manifest)
 
         return self._stats
 
@@ -150,88 +160,6 @@ class SecondBrainPipeline:
             return self._stats
 
         return self._apply_incremental_documents(changed_notes, deleted, chunk_size, label="增量")
-
-        deleted_set = set(deleted)
-
-        # 切分变更文档
-        print(f"✂️  切分变更文档...")
-        new_docs = split_notes_to_documents(
-            changed_notes, chunk_size=chunk_size, chunk_overlap=self.config.chunk_overlap,
-        )
-        print(f"📝 新增 {len(new_docs)} 个 chunks")
-
-        # 判断是否能走真正增量路径
-        can_incremental = (
-            self.vector_retriever is not None
-            and self.bm25_retriever is not None
-            and os.path.exists(os.path.join(self.config.index_dir, "faiss.index"))
-            and os.path.exists(os.path.join(self.config.index_dir, "documents.pkl"))
-        )
-
-        if can_incremental:
-            # 真正增量：先删除，再追加
-            if deleted_set:
-                print(f"🗑️  删除 {len(deleted_set)} 个旧文件对应的 chunks...")
-                vector_removed = self.vector_retriever.remove_documents_by_relative_paths(deleted_set)
-                bm25_removed = self.bm25_retriever.remove_documents_by_relative_paths(deleted_set)
-                print(f"🗑️  向量索引删除 {vector_removed} 个 chunks，BM25 删除 {bm25_removed} 个")
-
-            if new_docs:
-                print(f"➕ 追加 {len(new_docs)} 个新 chunks 到现有索引...")
-                self.vector_retriever.add_documents(new_docs)
-                self.bm25_retriever.add_documents(new_docs)
-
-            all_docs = self.vector_retriever.documents
-        else:
-            # 回退：加载旧 documents，过滤删除的，与新增合并后全量重建
-            print("⚠️  未检测到已加载索引，回退到全量重建...")
-            old_docs = []
-            docs_path = os.path.join(self.config.index_dir, "documents.pkl")
-            if os.path.exists(docs_path):
-                with open(docs_path, "rb") as f:
-                    old_docs = pickle.load(f)
-
-            filtered_old = [d for d in old_docs if d.metadata.get("relative_path", "") not in deleted_set]
-            all_docs = filtered_old + new_docs
-
-            self.vector_retriever = VectorRetriever()
-            self.vector_retriever.build_index(all_docs)
-
-            self.bm25_retriever = BM25Retriever()
-            self.bm25_retriever.build_index(all_docs)
-
-        from collections import Counter
-        domains = Counter(doc.metadata["domain"] for doc in all_docs)
-        self._stats = {
-            "total_notes": len(set(doc.metadata.get("relative_path", "") for doc in all_docs)),
-            "total_chunks": len(all_docs),
-            "domain_distribution": dict(domains.most_common()),
-        }
-
-        self.hybrid_retriever = HybridRetriever(self.vector_retriever, self.bm25_retriever)
-        self.rag_retriever = RAGRetriever(self.hybrid_retriever)
-
-        # 更新 manifest
-        new_manifest = {}
-        for doc in all_docs:
-            rp = doc.metadata.get("relative_path", "")
-            h = doc.metadata.get("content_hash", "")
-            if rp and h:
-                new_manifest[rp] = h
-
-        if self.config.versioned:
-            version_id = self.save_index_versioned()
-            manifest_path = os.path.join(str(self.version_manager.get_version_path(version_id)), "manifest.json")
-            print(f"✅ 增量索引完成，新版本: {version_id}（共 {len(all_docs)} chunks）")
-        else:
-            self.save_index(self.config.index_dir)
-            manifest_path = os.path.join(self.config.index_dir, "manifest.json")
-            print(f"✅ 增量索引完成（共 {len(all_docs)} chunks）")
-
-        with open(manifest_path, "w") as f:
-            json.dump(new_manifest, f, ensure_ascii=False, indent=2)
-
-        return self._stats
 
     def _apply_incremental_documents(
         self,
@@ -321,8 +249,7 @@ class SecondBrainPipeline:
             manifest_path = os.path.join(self.config.index_dir, "manifest.json")
             print(f"✅ {label}索引完成（共 {len(all_docs)} chunks）")
 
-        with open(manifest_path, "w") as f:
-            json.dump(new_manifest, f, ensure_ascii=False, indent=2)
+        self._write_json_atomic(manifest_path, new_manifest)
 
         return self._stats
 
@@ -575,8 +502,8 @@ class SecondBrainPipeline:
             pickle.dump(self.bm25_retriever, f)
 
         # 保存统计
-        with open(os.path.join(index_dir, "stats.json"), "w") as f:
-            json.dump(self._stats, f, ensure_ascii=False, indent=2)
+        stats_path = os.path.join(index_dir, "stats.json")
+        self._write_json_atomic(stats_path, self._stats)
 
     def get_stats(self) -> dict:
         """获取知识库统计信息"""
@@ -685,8 +612,7 @@ class SecondBrainPipeline:
             manifest_path = os.path.join(self.config.index_dir, "manifest.json")
             print(f"✅ 多格式索引重建完成，已保存到 {self.config.index_dir}")
 
-        with open(manifest_path, "w") as f:
-            json.dump(manifest, f, ensure_ascii=False, indent=2)
+        self._write_json_atomic(manifest_path, manifest)
         return self._stats
 
 

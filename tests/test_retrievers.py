@@ -233,3 +233,50 @@ class TestPipelineMultiFormatRebuild:
         vector.build_index.assert_not_called()
         assert stats["total_notes"] == 1
         assert stats["total_chunks"] == 1
+
+    def test_incremental_manifest_not_updated_when_save_fails(self, tmp_path, monkeypatch):
+        index_dir = tmp_path / "index"
+        index_dir.mkdir()
+        (index_dir / "faiss.index").write_bytes(b"placeholder")
+        (index_dir / "documents.pkl").write_bytes(b"placeholder")
+
+        pipeline = SecondBrainPipeline(
+            PipelineConfig(vault_path=str(tmp_path / "vault"), index_dir=str(index_dir))
+        )
+
+        old_doc = Document(
+            page_content="old content",
+            metadata={"relative_path": "report.pdf", "domain": "通识", "content_hash": "old"},
+        )
+        vector = MagicMock()
+        vector.documents = [old_doc]
+
+        pipeline.vector_retriever = vector
+        pipeline.bm25_retriever = MagicMock()
+
+        def raise_on_save(path):
+            raise RuntimeError("disk full")
+
+        monkeypatch.setattr(pipeline, "save_index", raise_on_save)
+
+        changed = [
+            ParsedDocument(
+                title="report",
+                content="new content for report",
+                source_file=str(tmp_path / "vault" / "report.pdf"),
+                relative_path="report.pdf",
+                folder="root",
+                content_hash="new",
+            )
+        ]
+
+        monkeypatch.setattr(
+            "src.retrievers.pipeline.split_notes_to_documents",
+            lambda docs, chunk_size, chunk_overlap: [],
+        )
+
+        with pytest.raises(RuntimeError, match="disk full"):
+            pipeline._apply_incremental_documents(changed, [], chunk_size=512)
+
+        # save_index 失败后 manifest 不应被更新
+        assert not (index_dir / "manifest.json").exists()
