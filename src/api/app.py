@@ -640,6 +640,23 @@ async def prometheus_metrics():
     return PlainTextResponse(content=metrics.to_prometheus(), media_type="text/plain")
 
 
+@app.get("/mcp/config")
+async def mcp_config():
+    """返回 Claude Desktop 等 MCP Client 可复制的 stdio 配置片段。"""
+    server_script = str(Path(__file__).resolve().parents[2] / "src" / "mcp" / "server.py")
+    return {
+        "mcpServers": {
+            "secondbrain": {
+                "command": "python",
+                "args": [server_script],
+                "env": {
+                    "PYTHONPATH": str(Path(__file__).resolve().parents[2]),
+                },
+            }
+        }
+    }
+
+
 @app.post("/api/v1/integrations/feishu/events")
 @limiter.limit("10/minute")
 async def feishu_events(request: Request):

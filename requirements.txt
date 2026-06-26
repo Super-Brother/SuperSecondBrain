@@ -37,5 +37,8 @@ redis>=5.0.0
 # 文件系统监控
 watchdog>=3.0.0
 
+# MCP 协议支持
+fastmcp==3.4.2
+
 # 飞书长连接 SDK
 lark-oapi>=1.4.0

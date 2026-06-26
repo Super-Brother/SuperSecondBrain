@@ -33,7 +33,7 @@ load_dotenv()
 
 
 PUBLIC_PATHS = {
-    "/health", "/", "/docs", "/openapi.json",
+    "/health", "/", "/docs", "/openapi.json", "/mcp/config",
     "/api/v1/auth/login", "/api/v1/auth/register",
     "/api/v1/auth/send-code", "/api/v1/auth/verify-code",
 }
