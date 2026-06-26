@@ -264,6 +264,23 @@ class TestUploadDocument:
 class TestIndexManagement:
     """测试索引管理 tools。"""
 
+    def test_index_tools_lazy_load_pipeline(self, temp_vault: str, mock_pipeline):
+        ctx = KBContext(pipeline=None, vault_path=temp_vault)
+        ctx.ensure_pipeline = MagicMock(return_value=mock_pipeline)
+        mcp = FastMCP("test-lazy-index")
+        lazy_tools = register_tools(mcp, ctx)
+
+        rebuild = lazy_tools["rebuild_index"](incremental=True)
+        versions = lazy_tools["list_index_versions"]()
+        switched = lazy_tools["switch_index_version"](version_id="v1")
+        rolled_back = lazy_tools["rollback_index"]()
+
+        assert rebuild["success"] is True
+        assert versions["success"] is True
+        assert switched["success"] is True
+        assert rolled_back["success"] is True
+        assert ctx.ensure_pipeline.call_count == 4
+
     def test_rebuild_index(self, ctx, tools, mock_pipeline):
         fn = tools["rebuild_index"]
         result = fn(incremental=True)
@@ -299,6 +316,19 @@ class TestIndexManagement:
 
 class TestKBStats:
     """测试统计类 tools。"""
+
+    def test_stats_tools_lazy_load_pipeline(self, temp_vault: str, mock_pipeline):
+        ctx = KBContext(pipeline=None, vault_path=temp_vault)
+        ctx.ensure_pipeline = MagicMock(return_value=mock_pipeline)
+        mcp = FastMCP("test-lazy-stats")
+        lazy_tools = register_tools(mcp, ctx)
+
+        stats = lazy_tools["get_kb_stats"]()
+        domains = lazy_tools["list_domains"]()
+
+        assert stats["success"] is True
+        assert domains["success"] is True
+        assert ctx.ensure_pipeline.call_count == 2
 
     def test_get_kb_stats(self, ctx, tools, mock_pipeline):
         fn = tools["get_kb_stats"]

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
 from fastapi.testclient import TestClient
 
 
@@ -18,5 +21,6 @@ def test_mcp_config_endpoint():
         sb = cfg["mcpServers"]["secondbrain"]
         assert "command" in sb
         assert "args" in sb
-        assert sb["command"] == "python"
+        assert sb["command"] == sys.executable
+        assert Path(sb["command"]).is_absolute()
         assert sb["args"][0].endswith("src/mcp/server.py")

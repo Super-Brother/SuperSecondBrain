@@ -647,7 +647,7 @@ async def mcp_config():
     return {
         "mcpServers": {
             "secondbrain": {
-                "command": "python",
+                "command": sys.executable,
                 "args": [server_script],
                 "env": {
                     "PYTHONPATH": str(Path(__file__).resolve().parents[2]),

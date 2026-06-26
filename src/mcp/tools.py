@@ -295,7 +295,7 @@ def register_tools(mcp: FastMCP, ctx: KBContext) -> dict[str, Callable]:
         Args:
             incremental: True 为增量重建（只处理变更文档），False 为全量重建
         """
-        pipeline = ctx.pipeline
+        pipeline = ctx.ensure_pipeline()
         if pipeline is None:
             return _pipeline_not_ready()
 
@@ -312,7 +312,7 @@ def register_tools(mcp: FastMCP, ctx: KBContext) -> dict[str, Callable]:
     @mcp.tool()
     def list_index_versions() -> dict[str, Any]:
         """列出所有索引版本及当前激活版本。"""
-        pipeline = ctx.pipeline
+        pipeline = ctx.ensure_pipeline()
         if pipeline is None:
             return _pipeline_not_ready()
 
@@ -337,7 +337,7 @@ def register_tools(mcp: FastMCP, ctx: KBContext) -> dict[str, Callable]:
         Args:
             version_id: 要切换的版本 ID
         """
-        pipeline = ctx.pipeline
+        pipeline = ctx.ensure_pipeline()
         if pipeline is None:
             return _pipeline_not_ready()
 
@@ -356,7 +356,7 @@ def register_tools(mcp: FastMCP, ctx: KBContext) -> dict[str, Callable]:
     @mcp.tool()
     def rollback_index() -> dict[str, Any]:
         """回滚到上一个索引版本。"""
-        pipeline = ctx.pipeline
+        pipeline = ctx.ensure_pipeline()
         if pipeline is None:
             return _pipeline_not_ready()
 
@@ -377,7 +377,7 @@ def register_tools(mcp: FastMCP, ctx: KBContext) -> dict[str, Callable]:
     @mcp.tool()
     def get_kb_stats() -> dict[str, Any]:
         """获取知识库统计信息，包括文档数、chunk 数、领域分布等。"""
-        pipeline = ctx.pipeline
+        pipeline = ctx.ensure_pipeline()
         if pipeline is None:
             return _pipeline_not_ready()
 
@@ -398,7 +398,7 @@ def register_tools(mcp: FastMCP, ctx: KBContext) -> dict[str, Callable]:
     @mcp.tool()
     def list_domains() -> dict[str, Any]:
         """列出知识库中的领域分布。"""
-        pipeline = ctx.pipeline
+        pipeline = ctx.ensure_pipeline()
         if pipeline is None:
             return _pipeline_not_ready()
 
