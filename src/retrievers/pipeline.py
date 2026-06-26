@@ -510,13 +510,23 @@ class SecondBrainPipeline:
         return self._stats
 
     def rebuild_index_from_vault(
-        self, vault_path: str = None, chunk_size: int = None, incremental: bool = False
+        self,
+        vault_path: str = None,
+        chunk_size: int = None,
+        incremental: bool = False,
+        include_types: list[str] | None = None,
     ):
         """从 vault 目录重建索引，支持多格式（.md / .pdf / .docx / .pptx / .xlsx）
 
         与 build_index() 的区别：
         - build_index() 使用 ObsidianParser，只处理 .md
         - rebuild_index_from_vault() 使用 DocumentRouter，处理所有注册格式
+
+        Args:
+            vault_path: 要解析的目录，默认使用 config.vault_path
+            chunk_size: 文档切分大小
+            incremental: 是否只处理变更文件
+            include_types: 限制处理的文件扩展名，如 [".pdf", ".docx"]
         """
         vault_path = vault_path or self.config.vault_path
         chunk_size = chunk_size or self.config.chunk_size
@@ -534,7 +544,9 @@ class SecondBrainPipeline:
                     manifest = json.load(f)
 
             print(f"📂 多格式增量解析（已有 {len(manifest)} 个文件记录）...")
-            changed_docs, deleted = router.parse_directory_incremental(manifest)
+            changed_docs, deleted = router.parse_directory_incremental(
+                manifest, include_types=include_types
+            )
             print(f"📄 新增/变更: {len(changed_docs)} 个文档，删除: {len(deleted)} 个文档")
             if not changed_docs and not deleted:
                 print("✅ 无变更，跳过索引重建")
@@ -543,7 +555,7 @@ class SecondBrainPipeline:
                 changed_docs, deleted, chunk_size, label="多格式增量"
             )
 
-        parsed_docs = router.parse_directory(vault_path)
+        parsed_docs = router.parse_directory(vault_path, include_types=include_types)
         print(f"📄 解析到 {len(parsed_docs)} 个文档")
 
         print(f"✂️  切分文档（chunk_size={chunk_size}）...")
