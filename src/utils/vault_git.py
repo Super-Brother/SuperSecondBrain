@@ -31,7 +31,7 @@ def pull_vault(vault_path: str, sync_script_path: str = "") -> GitSyncResult:
     if sync_script_path and Path(sync_script_path).exists():
         return _run([sync_script_path])
     if (vault / ".git").exists():
-        return _run(["git", "-C", str(vault), "pull"])
+        return _run(["git", "-C", str(vault), "pull", "--ff-only"])
     raise GitSyncError("No sync method configured. Set SYNC_SCRIPT_PATH or ensure vault is a git repo.")
 
 

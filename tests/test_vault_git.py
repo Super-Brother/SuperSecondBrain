@@ -36,7 +36,12 @@ def test_pull_vault_uses_git_pull_when_vault_is_repo(tmp_path):
         result = pull_vault(str(tmp_path), sync_script_path="")
 
     assert result.stdout == "pulled"
-    run.assert_called_once_with(["git", "-C", str(tmp_path), "pull"], capture_output=True, text=True, timeout=120)
+    run.assert_called_once_with(
+        ["git", "-C", str(tmp_path), "pull", "--ff-only"],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
 
 
 def test_pull_vault_raises_without_sync_method(tmp_path):

@@ -2,13 +2,13 @@
 
 本指南面向**个人服务器**场景，说明如何通过 Git 定时拉取 vault 变更并触发 FAISS 增量索引重建。
 
-> **范围说明**：本指南继续使用 FAISS 单机方案，不引入 Milvus。Milvus 是未来规模化（多实例、ACL、元数据过滤）的可选升级路径，不是当前个人服务器推荐方案。
+**范围说明**：本指南继续使用 FAISS 单机方案，不引入 Milvus。Milvus 是未来规模化（多实例、ACL、元数据过滤）的可选升级路径，不是当前个人服务器推荐方案。
 
 ## 目录布局
 
 推荐在个人服务器上使用以下目录结构：
 
-```
+```text
 /home/<user>/secondbrain/
 ├── app/                    # 应用代码仓库
 │   ├── scripts/sync_vault_incremental.py
@@ -31,8 +31,8 @@ VAULT_PATH=/home/<user>/secondbrain/data/vault
 INDEX_DIR=/home/<user>/secondbrain/data/index
 
 # 同步方式二选一：
-# 1. 直接 git pull（vault 目录是 git 仓库）
-# 2. 自定义同步脚本（例如通过 syncthing、rsync 等）
+# 1. vault 目录本身是 Git 仓库，脚本会直接 git pull
+# 2. 配置自定义同步脚本，例如通过 syncthing、rsync 等更新 vault
 SYNC_SCRIPT_PATH=/home/<user>/secondbrain/scripts/sync_vault.sh
 
 # LLM 与 Embedding（与 .env.example 一致）
@@ -48,7 +48,7 @@ EMBEDDING_BATCH_SIZE=32
 # API_KEY=your-secret-api-key
 ```
 
-> 如果使用 `SYNC_SCRIPT_PATH`，脚本需要自行完成 vault 目录的更新（如 `git pull`、`rsync` 等），并返回 exit code 0 表示成功。
+如果使用 `SYNC_SCRIPT_PATH`，脚本需要自行完成 vault 目录的更新（如 `git pull`、`rsync` 等），并返回 exit code 0 表示成功。
 
 ## 首次全量构建
 
@@ -56,20 +56,22 @@ EMBEDDING_BATCH_SIZE=32
 
 ```bash
 cd /home/<user>/secondbrain/app
-source .venv/bin/activate  # 或使用 conda：conda activate secondbrain-chat
+source .venv/bin/activate
+# 或使用 conda：conda activate secondbrain-chat
 
 # 方式 1：从 Obsidian vault 构建（仅 Markdown）
 python scripts/build_index.py
 
 # 方式 2：从多格式文档目录构建（推荐服务器多格式场景）
-python scripts/build_index.py --source-dir /home/<user>/secondbrain/data/vault \
+python scripts/build_index.py \
+  --source-dir /home/<user>/secondbrain/data/vault \
   --include-types .md,.pdf,.docx,.pptx,.xlsx
 ```
 
 构建完成后确认索引文件存在：
 
 ```bash
-ls $INDEX_DIR
+ls "$INDEX_DIR"
 # faiss.index  documents.pkl  bm25.pkl  manifest.json  stats.json
 ```
 
@@ -101,7 +103,8 @@ Environment="TOKENIZERS_PARALLELISM=false"
 Environment="OMP_NUM_THREADS=4"
 Environment="SPLIT_STRATEGY=legacy"
 ExecStart=/home/<user>/secondbrain/app/.venv/bin/python scripts/sync_vault_incremental.py
-# 或 ExecStart=/home/<user>/anaconda3/envs/secondbrain-chat/bin/python scripts/sync_vault_incremental.py
+# 或：
+# ExecStart=/home/<user>/anaconda3/envs/secondbrain-chat/bin/python scripts/sync_vault_incremental.py
 StandardOutput=append:/home/<user>/secondbrain/logs/sync.log
 StandardError=append:/home/<user>/secondbrain/logs/sync.log
 ```
@@ -133,7 +136,7 @@ sudo systemctl status secondbrain-sync.timer
 sudo systemctl list-timers secondbrain-sync.timer
 ```
 
-> 默认 10 分钟一次，可根据 vault 更新频率调整 `OnUnitActiveSec`。
+默认 10 分钟一次，可根据 vault 更新频率调整 `OnUnitActiveSec`。
 
 ## 手动运行与查看日志
 
@@ -166,6 +169,7 @@ python scripts/sync_vault_incremental.py
 
 ```bash
 sudo journalctl -u secondbrain-sync.service -f
+
 # 或查看文件日志
 tail -f /home/<user>/secondbrain/logs/sync.log
 ```
@@ -186,15 +190,16 @@ tail -f /home/<user>/secondbrain/logs/sync.log
 ps aux | grep sync_vault_incremental
 
 # 如果没有进程，手动删除锁文件
-rm $INDEX_DIR/.sync.lock
+rm "$INDEX_DIR/.sync.lock"
 ```
 
-### 场景 2：Git 拉取冲突
+### 场景 2：Git 拉取冲突或非 fast-forward
 
 ```bash
-cd $VAULT_PATH
+cd "$VAULT_PATH"
 git status
-# 手动解决冲突后重新提交/拉取
+
+# 手动解决冲突或分叉后再拉取
 git pull --rebase
 ```
 
@@ -204,11 +209,11 @@ git pull --rebase
 
 ```bash
 # 备份旧索引（可选）
-mv $INDEX_DIR $INDEX_DIR.bak.$(date +%Y%m%d%H%M%S)
-mkdir -p $INDEX_DIR
+mv "$INDEX_DIR" "$INDEX_DIR.bak.$(date +%Y%m%d%H%M%S)"
+mkdir -p "$INDEX_DIR"
 
 # 重新全量构建
-python scripts/build_index.py --source-dir $VAULT_PATH
+python scripts/build_index.py --source-dir "$VAULT_PATH"
 ```
 
 ### 场景 4：LLM 或 Embedding 调用失败
@@ -216,7 +221,7 @@ python scripts/build_index.py --source-dir $VAULT_PATH
 检查环境变量和服务可达性：
 
 ```bash
-curl $LLM_BASE_URL/models -H "Authorization: Bearer $LLM_API_KEY"
+curl "$LLM_BASE_URL/models" -H "Authorization: Bearer $LLM_API_KEY"
 python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('$EMBEDDING_MODEL')"
 ```
 

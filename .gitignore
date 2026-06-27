@@ -16,6 +16,7 @@ data
 # 本地模型文件（大体积，不提交到 git）
 models/*
 !models/.gitkeep
+bge-small-zh-v1.5.tar
 
 node_modules
 /docs/*

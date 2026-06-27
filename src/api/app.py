@@ -242,11 +242,14 @@ async def lifespan(app: FastAPI):
     if pipeline is not None and (index_path / "faiss.index").exists():
         log.info("加载已有索引: %s", config.index_dir)
         pipeline.load_index(config.index_dir)
-        if not is_desktop_mode():
+        skip_warmup = os.getenv("SKIP_MODEL_WARMUP", "false").lower() in {"true", "1", "yes"}
+        if not is_desktop_mode() and not skip_warmup:
             # 预热模型（避免首次请求时加载导致的长时间等待）
             log.info("正在预热模型（Reranker / Embedding / LLM）...")
             pipeline.warmup()
             log.info("预热完成，服务就绪")
+        elif skip_warmup:
+            log.info("已跳过模型预热: SKIP_MODEL_WARMUP=true")
     elif not is_desktop_mode():
         log.warning("未找到索引，请运行: python scripts/build_index.py")
 
