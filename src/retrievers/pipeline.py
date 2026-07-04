@@ -25,6 +25,62 @@ from src.retrievers.rag_retriever import (
 from src.models.llm_generator import LLMGenerator, LLMConfig
 from src.retrievers.query_rewriter import QueryRewriter
 from src.utils.index_version import IndexVersionManager
+from src.utils.sanitizer import QuerySanitizer
+
+
+GREETING_QUERIES = {
+    "hi",
+    "hello",
+    "hey",
+    "你好",
+    "您好",
+    "哈喽",
+    "哈啰",
+    "嗨",
+    "在吗",
+    "在么",
+    "早上好",
+    "中午好",
+    "下午好",
+    "晚上好",
+    "早",
+}
+
+CHINESE_GREETING_BASES = {
+    "你好",
+    "您好",
+    "哈喽",
+    "哈啰",
+    "嗨",
+    "在吗",
+    "在么",
+    "早上好",
+    "中午好",
+    "下午好",
+    "晚上好",
+    "早",
+}
+
+GREETING_PARTICLES = {"啊", "呀", "哇", "啦", "呢", "哦", "喔", "哈"}
+
+GREETING_REPLY = "你好，我在。你可以直接问我知识库里的内容，我会帮你检索并整理答案。"
+
+
+def _normalize_short_query(query: str) -> str:
+    return query.strip().lower().strip(" \t\r\n,，。.!！?？~～")
+
+
+def get_direct_reply(query: str) -> str | None:
+    normalized = _normalize_short_query(query)
+    if normalized in GREETING_QUERIES:
+        return GREETING_REPLY
+
+    stripped = normalized
+    while stripped and stripped[-1] in GREETING_PARTICLES:
+        stripped = stripped[:-1]
+    if stripped != normalized and stripped in CHINESE_GREETING_BASES:
+        return GREETING_REPLY
+    return None
 
 
 @dataclass
@@ -64,6 +120,7 @@ class SecondBrainPipeline:
         self.rag_retriever = None
         self.llm_generator = None
         self.query_rewriter = None
+        self.query_sanitizer = QuerySanitizer()
         self._stats = {}
         # 索引版本管理器（可选启用，默认兼容旧版无版本化模式）
         self.version_manager = IndexVersionManager(self.config.index_dir)
@@ -365,11 +422,35 @@ class SecondBrainPipeline:
             "base_url": llm_config.base_url,
         }
 
-    def _rewrite_query(self, query: str) -> tuple[str, str]:
+    def _sanitize_history(self, history: list[dict] | None) -> list[dict] | None:
+        if not history:
+            return history
+        sanitized = []
+        for message in history:
+            sanitized.append(
+                {
+                    **message,
+                    "content": self.query_sanitizer.sanitize(
+                        str(message.get("content", ""))
+                    ),
+                }
+            )
+        return sanitized
+
+    def _rewrite_query(
+        self,
+        query: str,
+        history: list[dict] | None = None,
+    ) -> tuple[str, str]:
         """查询改写，返回 (改写后查询, 原始查询)"""
         if self.query_rewriter:
             try:
-                rewritten = self.query_rewriter.rewrite(query)
+                safe_query = self.query_sanitizer.sanitize(query)
+                safe_history = self._sanitize_history(history)
+                rewritten = self.query_rewriter.rewrite(
+                    safe_query,
+                    history=safe_history,
+                )
                 print(f"[QueryRewrite] '{query}' → '{rewritten}'")
                 return rewritten, query
             except Exception:
@@ -378,11 +459,15 @@ class SecondBrainPipeline:
 
     def chat(self, query: str, domain: str = None, top_k: int = None, history: list[dict] | None = None) -> dict:
         """同步对话（非流式），支持多轮历史"""
+        direct_reply = get_direct_reply(query)
+        if direct_reply:
+            return {"answer": direct_reply, "sources": [], "query": query}
+
         if self.rag_retriever is None:
             raise RuntimeError("请先调用 build_index() 或 load_index()")
 
         self._ensure_llm()
-        search_query, _ = self._rewrite_query(query)
+        search_query, _ = self._rewrite_query(query, history=history)
 
         # 检索
         config = SearchConfig(
@@ -426,11 +511,16 @@ class SecondBrainPipeline:
 
     async def chat_stream(self, query: str, domain: str = None, top_k: int = None, history: list[dict] | None = None) -> AsyncGenerator[str, None]:
         """流式对话，支持多轮历史"""
+        direct_reply = get_direct_reply(query)
+        if direct_reply:
+            yield direct_reply
+            return
+
         if self.rag_retriever is None:
             raise RuntimeError("请先调用 build_index() 或 load_index()")
 
         self._ensure_llm()
-        search_query, _ = self._rewrite_query(query)
+        search_query, _ = self._rewrite_query(query, history=history)
 
         # 检索
         config = SearchConfig(

@@ -19,19 +19,51 @@ REWRITE_PROMPT = """你是一个查询改写助手。用户会输入一个自然
 改写：上文讨论的核心概念 详细解释 定义 原理"""
 
 
+def _format_history_context(history: list[dict] | None, limit: int = 6) -> str:
+    if not history:
+        return ""
+
+    lines = []
+    for message in history[-limit:]:
+        role = message.get("role")
+        content = str(message.get("content", "")).strip()
+        if role not in {"user", "assistant"} or not content:
+            continue
+        label = "用户" if role == "user" else "助手"
+        lines.append(f"{label}: {content[:200]}")
+    return "\n".join(lines)
+
+
 class QueryRewriter:
     def __init__(self, base_url: str, api_key: str, model: str):
         self.client = OpenAI(base_url=base_url, api_key=api_key)
         self.model = model
 
-    def rewrite(self, query: str, timeout: float = 5.0) -> str:
+    def rewrite(
+        self,
+        query: str,
+        timeout: float = 5.0,
+        history: list[dict] | None = None,
+    ) -> str:
         """将口语化查询改写为检索友好的关键词"""
+        messages = [{"role": "system", "content": REWRITE_PROMPT}]
+        history_context = _format_history_context(history)
+        if history_context:
+            messages.append(
+                {
+                    "role": "system",
+                    "content": (
+                        "最近对话上下文如下。若用户问题是追问或省略了指代，"
+                        "请结合上下文补全检索关键词；不要把上下文原样复述。\n"
+                        f"{history_context}"
+                    ),
+                }
+            )
+        messages.append({"role": "user", "content": query})
+
         response = self.client.chat.completions.create(
             model=self.model,
-            messages=[
-                {"role": "system", "content": REWRITE_PROMPT},
-                {"role": "user", "content": query},
-            ],
+            messages=messages,
             temperature=0.0,
             max_tokens=128,
             timeout=timeout,

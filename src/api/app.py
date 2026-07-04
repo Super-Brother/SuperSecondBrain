@@ -198,6 +198,7 @@ def _resolve_pipeline_config() -> PipelineConfig:
         llm_model=llm_model,
         embedding_model=desktop_cfg.embedding_model if desktop_cfg else os.getenv("EMBEDDING_MODEL", "BAAI/bge-large-zh-v1.5"),
         reranker_model=desktop_cfg.reranker_model if desktop_cfg else os.getenv("RERANKER_MODEL", "BAAI/bge-reranker-base"),
+        enable_query_rewrite=os.getenv("ENABLE_QUERY_REWRITE", "false").lower() in {"1", "true", "yes", "on"},
     )
 
 
@@ -730,6 +731,19 @@ async def get_session_messages(session_id: str):
 @app.post("/api/v1/chat", response_model=ChatResponse)
 @limiter.limit("10/minute")
 async def chat(request: Request, body: ChatRequest):
+    from src.retrievers.pipeline import get_direct_reply
+
+    direct_reply = get_direct_reply(body.query)
+    if direct_reply:
+        session_id = body.session_id or (conv_manager.create_session() if conv_manager else "")
+        _save_turn(session_id, body.query, direct_reply, [])
+        return ChatResponse(
+            query=body.query,
+            answer=direct_reply,
+            sources=[],
+            session_id=session_id,
+        )
+
     if pipeline is None or pipeline.rag_retriever is None:
         return ChatResponse(
             query=body.query,
@@ -775,6 +789,19 @@ async def chat(request: Request, body: ChatRequest):
 @app.post("/api/v1/chat/stream")
 @limiter.limit("10/minute")
 async def chat_stream(request: Request, body: ChatRequest):
+    from src.retrievers.pipeline import get_direct_reply
+
+    direct_reply = get_direct_reply(body.query)
+    if direct_reply:
+        session_id = body.session_id or (conv_manager.create_session() if conv_manager else "")
+
+        async def direct_stream():
+            yield f"data: {json.dumps({'type': 'answer', 'content': direct_reply}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'done', 'session_id': session_id}, ensure_ascii=False)}\n\n"
+            _save_turn(session_id, body.query, direct_reply, [])
+
+        return StreamingResponse(direct_stream(), media_type="text/event-stream")
+
     if pipeline is None or pipeline.rag_retriever is None:
         async def error_stream():
             yield "data: " + json.dumps({"error": "知识库索引未加载"}, ensure_ascii=False) + "\n\n"
