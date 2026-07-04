@@ -13,11 +13,36 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - HF_ENDPOINT=https://hf-mirror.com
       - SENTENCE_TRANSFORMERS_HOME=/app/data/models
+      - FEISHU_WS_AUTOSTART=false
+      - FEISHU_BOT_ENABLED=false
     volumes:
-      # ./data/vault  -> Git-synced note/document workspace
-      # ./data/index  -> persisted FAISS/BM25 index
+      # ./data/vault -> Git-synced note/document workspace
+      # ./data/index -> persisted FAISS/BM25 index
       # ./data/models -> local embedding/reranker model cache
       - ./data:/app/data
+      - huggingface_cache:/root/.cache/huggingface
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+  feishu-ws:
+    image: secondbrain-chat-api
+    build: .
+    command: ["sh", "-lc", "python -c 'import importlib.util, sys; sys.exit(0 if importlib.util.find_spec(\"lark_oapi\") else 1)' || pip install --no-cache-dir 'lark-oapi>=1.4.0'; exec python scripts/feishu_ws_worker.py"]
+    env_file:
+      - .env.server
+    environment:
+      - VECTOR_STORE_BACKEND=faiss
+      - REDIS_URL=redis://redis:6379/0
+      - HF_ENDPOINT=https://hf-mirror.com
+      - SENTENCE_TRANSFORMERS_HOME=/app/data/models
+      - FEISHU_BOT_ENABLED=true
+      - FEISHU_WS_AUTOSTART=false
+      - SKIP_MODEL_WARMUP=false
+    volumes:
+      - ./data:/app/data
+      - ./src:/app/src
+      - ./scripts:/app/scripts
       - huggingface_cache:/root/.cache/huggingface
     depends_on:
       - redis

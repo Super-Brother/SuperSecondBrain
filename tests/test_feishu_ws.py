@@ -35,9 +35,27 @@ def _message_payload():
 class RecordingFeishuClient:
     def __init__(self):
         self.replies = []
+        self.reactions = []
+        self.deleted_reactions = []
 
     def reply_to_message(self, message_id: str, text: str):
         self.replies.append({"message_id": message_id, "text": text})
+
+    def add_message_reaction(self, message_id: str, emoji_type: str):
+        reaction_id = f"reaction_{len(self.reactions) + 1}"
+        self.reactions.append(
+            {
+                "message_id": message_id,
+                "emoji_type": emoji_type,
+                "reaction_id": reaction_id,
+            }
+        )
+        return reaction_id
+
+    def delete_message_reaction(self, message_id: str, reaction_id: str):
+        self.deleted_reactions.append(
+            {"message_id": message_id, "reaction_id": reaction_id}
+        )
 
 
 class FakeEventDispatcherBuilder:
@@ -141,6 +159,16 @@ def test_ws_worker_registers_message_event_and_starts_client():
                 "chat_type": "p2p",
             },
         }
+    ]
+    assert client.reactions == [
+        {
+            "message_id": "om_ws_1",
+            "emoji_type": "THINKING",
+            "reaction_id": "reaction_1",
+        },
+    ]
+    assert client.deleted_reactions == [
+        {"message_id": "om_ws_1", "reaction_id": "reaction_1"},
     ]
     assert client.replies == [{"message_id": "om_ws_1", "text": "用长连接即可。"}]
 

@@ -48,9 +48,27 @@ def _message_payload(
 class RecordingFeishuClient:
     def __init__(self):
         self.replies = []
+        self.reactions = []
+        self.deleted_reactions = []
 
     def reply_to_message(self, message_id: str, text: str):
         self.replies.append({"message_id": message_id, "text": text})
+
+    def add_message_reaction(self, message_id: str, emoji_type: str):
+        reaction_id = f"reaction_{len(self.reactions) + 1}"
+        self.reactions.append(
+            {
+                "message_id": message_id,
+                "emoji_type": emoji_type,
+                "reaction_id": reaction_id,
+            }
+        )
+        return reaction_id
+
+    def delete_message_reaction(self, message_id: str, reaction_id: str):
+        self.deleted_reactions.append(
+            {"message_id": message_id, "reaction_id": reaction_id}
+        )
 
 
 def _handler(allowed_open_ids="ou_allowed", rag_answer=None):
@@ -148,6 +166,16 @@ def test_text_message_calls_rag_and_replies_with_sources():
             },
         }
     ]
+    assert client.reactions == [
+        {
+            "message_id": "om_1",
+            "emoji_type": "THINKING",
+            "reaction_id": "reaction_1",
+        },
+    ]
+    assert client.deleted_reactions == [
+        {"message_id": "om_1", "reaction_id": "reaction_1"},
+    ]
     assert len(client.replies) == 1
     assert client.replies[0]["message_id"] == "om_1"
     assert "推荐用飞书机器人适配层接入。" in client.replies[0]["text"]
@@ -222,8 +250,18 @@ def test_rag_error_gets_safe_reply():
 
     assert result.status_code == 200
     assert result.body == {"status": "error"}
+    assert client.reactions == [
+        {
+            "message_id": "om_1",
+            "emoji_type": "THINKING",
+            "reaction_id": "reaction_1",
+        },
+    ]
+    assert client.deleted_reactions == [
+        {"message_id": "om_1", "reaction_id": "reaction_1"},
+    ]
     assert client.replies == [
-        {"message_id": "om_1", "text": "知识库暂时不可用，请稍后再试。"}
+        {"message_id": "om_1", "text": "知识库暂时不可用，请稍后再试。"},
     ]
     assert "secret boom" not in client.replies[0]["text"]
     assert audit_events[-1]["status"] == "failure"
@@ -312,4 +350,14 @@ def test_fastapi_feishu_route_deduplicates_message_ids(api_client, monkeypatch):
     assert second.status_code == 200
     assert second.json() == {"status": "duplicate"}
     assert len(rag_calls) == 1
+    assert feishu_client.reactions == [
+        {
+            "message_id": "om_route_duplicate",
+            "emoji_type": "THINKING",
+            "reaction_id": "reaction_1",
+        },
+    ]
+    assert feishu_client.deleted_reactions == [
+        {"message_id": "om_route_duplicate", "reaction_id": "reaction_1"},
+    ]
     assert len(feishu_client.replies) == 1

@@ -104,6 +104,25 @@ class FeishuAPIClient:
             headers={"Authorization": f"Bearer {token}"},
         )
 
+    def add_message_reaction(self, message_id: str, emoji_type: str) -> str | None:
+        token = self._get_tenant_access_token()
+        url = f"{self.config.api_base_url}/im/v1/messages/{message_id}/reactions"
+        data = self._post_json(
+            url,
+            {"reaction_type": {"emoji_type": emoji_type}},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        reaction = data.get("data") or {}
+        return reaction.get("reaction_id")
+
+    def delete_message_reaction(self, message_id: str, reaction_id: str) -> None:
+        token = self._get_tenant_access_token()
+        url = (
+            f"{self.config.api_base_url}/im/v1/messages/"
+            f"{message_id}/reactions/{reaction_id}"
+        )
+        self._delete_json(url, headers={"Authorization": f"Bearer {token}"})
+
     def _get_tenant_access_token(self) -> str:
         with self._token_lock:
             now = time.time()
@@ -142,6 +161,31 @@ class FeishuAPIClient:
                 **(headers or {}),
             },
             method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=10) as response:
+                body = response.read().decode("utf-8")
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"Feishu API HTTP {exc.code}: {detail}") from exc
+        except urllib.error.URLError as exc:
+            raise RuntimeError(f"Feishu API request failed: {exc.reason}") from exc
+
+        data = json.loads(body) if body else {}
+        if data.get("code", 0) != 0:
+            raise RuntimeError(f"Feishu API error: {data}")
+        return data
+
+    def _delete_json(
+        self, url: str, headers: dict[str, str] | None = None
+    ) -> dict[str, Any]:
+        request = urllib.request.Request(
+            url,
+            headers={
+                "Content-Type": "application/json; charset=utf-8",
+                **(headers or {}),
+            },
+            method="DELETE",
         )
         try:
             with urllib.request.urlopen(request, timeout=10) as response:
@@ -240,13 +284,17 @@ class FeishuEventHandler:
             return FeishuCallbackResult(status_code=200, body={"status": "empty"})
 
         session_id = self._session_id(context)
+        reaction_id: str | None = None
         try:
+            reaction_id = self._add_processing_reaction(message_id)
             result = self.ask_knowledge(query, session_id, context)
             answer = self._format_answer(result)
             self.client.reply_to_message(message_id, answer)
+            self._delete_processing_reaction(message_id, reaction_id)
             self._record_audit({**context, "session_id": session_id}, "success")
         except Exception as exc:
             log.warning("Feishu knowledge reply failed: %s", exc)
+            self._delete_processing_reaction(message_id, reaction_id)
             self.client.reply_to_message(message_id, "知识库暂时不可用，请稍后再试。")
             self._record_audit({**context, "session_id": session_id}, "failure")
             return FeishuCallbackResult(status_code=200, body={"status": "error"})
@@ -302,6 +350,23 @@ class FeishuEventHandler:
         if source_lines:
             return f"{answer}\n\n来源：\n" + "\n".join(source_lines)
         return answer
+
+    def _add_processing_reaction(self, message_id: str) -> str | None:
+        try:
+            return self.client.add_message_reaction(message_id, "THINKING")
+        except Exception as exc:
+            log.warning("Feishu processing reaction add failed: %s", exc)
+            return None
+
+    def _delete_processing_reaction(
+        self, message_id: str, reaction_id: str | None
+    ) -> None:
+        if not reaction_id:
+            return
+        try:
+            self.client.delete_message_reaction(message_id, reaction_id)
+        except Exception as exc:
+            log.warning("Feishu processing reaction delete failed: %s", exc)
 
     def _record_audit(self, details: dict[str, Any], status: str) -> None:
         if self.audit_recorder is None:
